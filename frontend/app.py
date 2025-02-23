@@ -33,15 +33,17 @@ def main():
         st.session_state["session_id"] = "user123"
     if "messages" not in st.session_state:
         st.session_state["messages"] = []
+    if "input_key" not in st.session_state:
+        st.session_state["input_key"] = 0  # Key to reset the input widget
 
     # Display chat history
     for msg in st.session_state["messages"]:
         st.write(f"{msg['role']}: {msg['text']}")
 
     # User input
-    user_input = st.text_input("You:", key="user_input", value="")
+    user_input = st.text_input("You:", key=f"user_input_{st.session_state['input_key']}")
     if user_input:
-        # Add user input to chat history
+        # Add user message to chat history
         st.session_state["messages"].append({"role": "user", "text": user_input})
 
         # Get bot response
@@ -50,7 +52,10 @@ def main():
         # Add bot response to chat history
         st.session_state["messages"].append({"role": "bot", "text": bot_response})
 
-        # Rerun the app to display the updated chat history
+        # Clear the input by incrementing the input key
+        st.session_state["input_key"] += 1
+
+        # Rerun the app to refresh the UI
         st.rerun()
 
 
