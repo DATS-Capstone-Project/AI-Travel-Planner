@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+streamlit
+openai
+python-dateutil
+requests
+pydantic
