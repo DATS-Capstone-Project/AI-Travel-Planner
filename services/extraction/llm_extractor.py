@@ -66,10 +66,12 @@ Extract ONLY the following travel information from the user's message:
    - Return the full, proper name of the origin.
    - if user says "from", location should be set to origin.
    - if user inputs a city that doesnt exist, ask the user to enter a city name.
+   - if the user inputs a city that has alphabets and numbers, ask the user to input the correct origin city name.
 2. destination: The specific city or location the user wants to visit
    - Return the full, proper name of the destination
    - if user says "to", destination should be set to destination
    - if user inputs a city that doesnt exist, ask the user to enter a city name.
+   - if the user inputs a city that has alphabets and numbers, ask the user to input the correct destination city name.
 
 3. start_date: Convert any SPECIFIC date mention to YYYY-MM-DD format.
    - Pay EXTREME attention to ordinal numbers (1st → 01, 2nd → 02, 3rd → 03, etc.).
@@ -106,12 +108,15 @@ Extract ONLY the following travel information from the user's message:
 EXTRACTION RULES:
 - Extract ONLY what is explicitly stated in THIS message
 - For each field, if no relevant information exists, set to null
+- if the destination and origin entered does not exist in this world or to your best of your knowledge, ask the user to set a different city name.
 - NEVER invent or assume information not present in the message
 - Be extremely precise with date formats (YYYY-MM-DD)
 - Be especially careful with ordinal numbers in dates (1st, 2nd, 3rd, etc.)
 - ALWAYS set date fields to null for vague references and use date_reference instead
 
 EXAMPLES:
+"I want to go wvqh6373"
+-> {{"destination":null,"origin":null,"start_date": null, "end_date": null, "travelers": null, "budget": null, "preferences": null}}
 "I want to plan a trip from Mumbai"
 -> {{"origin": "Mumbai","destination": null, "start_date": null, "end_date": null, "travelers": null, "budget": null, "preferences": null, "date_reference": "next_week"}}
 
