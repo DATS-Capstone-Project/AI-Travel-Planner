@@ -119,3 +119,4 @@ def calculate_duration(start_date: str, end_date: str) -> Optional[int]:
         return (end - start).days
     except Exception:
         return None
+
