@@ -6,7 +6,7 @@ from openai import OpenAI
 from config.settings import OPENAI_API_KEY, EXTRACTION_MODEL
 from services.extraction.extractor_interface import EntityExtractor
 from models.trip_details import TripDetails
-from utils.date_utils import validate_future_date
+from utils.date_utils import validate_future_date,validate_date_range
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -64,10 +64,12 @@ Extract ONLY the following travel information from the user's message:
 
 1. origin: The departure city or location from where the journey begins.
    - Return the full, proper name of the origin.
-   - if user says "from", location should be set to origin
+   - if user says "from", location should be set to origin.
+   - if user inputs a city that doesnt exist, ask the user to enter a city name.
 2. destination: The specific city or location the user wants to visit
    - Return the full, proper name of the destination
    - if user says "to", destination should be set to destination
+   - if user inputs a city that doesnt exist, ask the user to enter a city name.
 
 3. start_date: Convert any SPECIFIC date mention to YYYY-MM-DD format.
    - Pay EXTREME attention to ordinal numbers (1st → 01, 2nd → 02, 3rd → 03, etc.).
@@ -229,7 +231,7 @@ User message: {message}"""
         if data.get("start_date"):
             validated_start = validate_future_date(data["start_date"])
             if validated_start is None:
-                cleaned["start_date_error"] = "Start date must be in the future and within 6 months."
+                cleaned["start_date"] = "Error"
             else:
                 cleaned["start_date"] = validated_start
 
@@ -237,9 +239,20 @@ User message: {message}"""
         if data.get("end_date"):
             validated_end = validate_future_date(data["end_date"])
             if validated_end is None:
-                cleaned["end_date_error"] = "End date must be in the future and within 6 months."
+                cleaned["end_date"] = "Error"
             else:
                 cleaned["end_date"] = validated_end
+
+        # Ensure that end_date is after start_date
+        if "start_date" in cleaned and "end_date" in cleaned:
+            try:
+                start_dt = datetime.strptime(cleaned["start_date"], "%Y-%m-%d")
+                end_dt = datetime.strptime(cleaned["end_date"], "%Y-%m-%d")
+                if end_dt <= start_dt:
+                    # Mark end_date as error if it is not strictly after start_date
+                    cleaned["end_date"] = "Error"
+            except Exception as e:
+                cleaned["end_date"] = "Error"
 
         # Handle date references and set confidence levels if provided
         if date_reference:
