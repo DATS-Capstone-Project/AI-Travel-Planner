@@ -222,8 +222,7 @@ class AssistantsManager:
         trip_dict = trip_details.to_dict()
 
         # Check for date errors in the trip details and prompt the user to correct them if found.
-        if trip_dict.get("start_date")=="Error" or trip_dict.get("end_date")=="Error":
-
+        if trip_dict.get("start_date") == "Error" or trip_dict.get("end_date") == "Error":
             return {
                 "response": "Please ensure your start date is in the future and within the next 6 months, and that your end date is later than your start date and also within the next 6 months. Also, check if your end date is after your start date.",
                 "extracted_data": trip_dict
