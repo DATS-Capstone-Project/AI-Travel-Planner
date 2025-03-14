@@ -62,34 +62,40 @@ If the current message MODIFIES previous information, prefer the NEW information
             extraction_prompt = f"""{context_str}
 Extract ONLY the following travel information from the user's message:
 
-1. destination: The specific city or location the user wants to visit
+1. origin: The departure city or location from where the journey begins.
+   - Return the full, proper name of the origin.
+   - if user says "from", location should be set to origin
+2. destination: The specific city or location the user wants to visit
    - Return the full, proper name of the destination
+   - if user says "to", destination should be set to destination
 
-2. start_date: Convert any SPECIFIC date mention to YYYY-MM-DD format
-   - Pay EXTREME attention to ordinal numbers (1st → 01, 2nd → 02, 3rd → 03, etc.)
-   - If month is mentioned without year, use {today.year}
-   - For "tomorrow", use {(today + timedelta(days=1)).strftime('%Y-%m-%d')}
-   - IMPORTANT: For vague references like "next week" or "next month", use null
+3. start_date: Convert any SPECIFIC date mention to YYYY-MM-DD format.
+   - Pay EXTREME attention to ordinal numbers (1st → 01, 2nd → 02, 3rd → 03, etc.).
+   - If month is mentioned without year, use {today.year}.
+   - For "tomorrow", use {(today + timedelta(days=1)).strftime('%Y-%m-%d')}.
+   - IMPORTANT: For vague references like "next week" or "next month", use null.
+   - If the date provided is invalid (e.g. in the past or not following the format), output an error field "start_date_error" with the message "Invalid start date. Please provide a valid future date in YYYY-MM-DD format."
 
-3. end_date: Convert to YYYY-MM-DD format OR calculate based on duration
-   - If user mentions "X days/nights" calculate: start_date + (X-1) days
-   - If user mentions "until" or "to" a specific date, use that date
-   - IMPORTANT: For vague references like "next week" or "next month", use null
+4. end_date: Convert to YYYY-MM-DD format OR calculate based on duration.
+   - If the user mentions "X days/nights", calculate: start_date + (X-1) days.
+   - If the user mentions "until" or "to" a specific date, use that date.
+   - IMPORTANT: For vague references like "next week" or "next month", use null.
+   - If the date provided is invalid (for example, it is earlier than the start date or not in the future), output an error field "end_date_error" with the message "Invalid end date. Please provide a valid date that is after the start date and in the future in YYYY-MM-DD format."
 
-4. travelers: The TOTAL number of people traveling, including the user
+5. travelers: The TOTAL number of people traveling, including the user
    - If user says "with X people/friends/family" → total is X+1
    - If user says "X of us" or "total of X" → total is X
    - Pay attention to context to avoid double-counting
 
-5. budget: Extract any mentioned budget amount in USD as integer
+6. budget: Extract any mentioned budget amount in USD as integer
    - Look for numbers near words like "budget", "spend", "cost"
    - If a range is given, use the average
 
-6. preferences: Extract activity preferences, interests or requirements
+7. preferences: Extract activity preferences, interests or requirements
    - Include mentioned activities, sightseeing interests, special requirements
    - Multiple preferences should be separated by commas
 
-7. date_reference: Include this special field ONLY IF user uses vague date terms
+8. date_reference: Include this special field ONLY IF user uses vague date terms
    - If message contains "next week", set to "next_week"
    - If message contains "next month", set to "next_month" 
    - If message contains "this weekend", set to "this_weekend"
@@ -104,6 +110,9 @@ EXTRACTION RULES:
 - ALWAYS set date fields to null for vague references and use date_reference instead
 
 EXAMPLES:
+"I want to plan a trip from Mumbai"
+-> {{"origin": "Mumbai","destination": null, "start_date": null, "end_date": null, "travelers": null, "budget": null, "preferences": null, "date_reference": "next_week"}}
+
 "I want to visit Paris in June for a week"
 → {{"destination": "Paris", "start_date": "{today.year}-06-01", "end_date": "{today.year}-06-07", "travelers": null, "budget": null, "preferences": null, "date_reference": null}}
 
@@ -205,64 +214,61 @@ User message: {message}"""
         Returns:
             Cleaned and validated data dictionary
         """
-        # Create a new dict to avoid modifying the input
         cleaned = {}
         confidence_levels = {}
+
+        # Clean up origin
+        if data.get("origin"):
+            cleaned["origin"] = data["origin"].strip().title()
 
         # Clean up destination
         if data.get("destination"):
             cleaned["destination"] = data["destination"].strip().title()
 
-        # Validate dates and track confidence
+        # Validate start_date
         if data.get("start_date"):
-            cleaned["start_date"] = validate_future_date(data["start_date"])
+            validated_start = validate_future_date(data["start_date"])
+            if validated_start is None:
+                cleaned["start_date_error"] = "Start date must be in the future and within 6 months."
+            else:
+                cleaned["start_date"] = validated_start
 
+        # Validate end_date
         if data.get("end_date"):
-            cleaned["end_date"] = validate_future_date(data["end_date"])
+            validated_end = validate_future_date(data["end_date"])
+            if validated_end is None:
+                cleaned["end_date_error"] = "End date must be in the future and within 6 months."
+            else:
+                cleaned["end_date"] = validated_end
 
-        # Handle date references and set confidence levels
+        # Handle date references and set confidence levels if provided
         if date_reference:
             logger.info(f"Detected vague date reference: {date_reference}")
-
-            # Mark specific date references as needing confirmation
+            today = datetime.now()
             if date_reference == "next_week":
-                # Calculate dates for next week but mark as inferred
-                today = datetime.now()
                 next_week_start = today + timedelta(days=(7 - today.weekday()))
                 next_week_end = next_week_start + timedelta(days=6)
-
                 cleaned["start_date"] = next_week_start.strftime("%Y-%m-%d")
                 cleaned["end_date"] = next_week_end.strftime("%Y-%m-%d")
-
                 confidence_levels["start_date"] = "inferred"
                 confidence_levels["end_date"] = "inferred"
-
             elif date_reference == "next_month":
-                # Calculate dates for next month but mark as inferred
-                today = datetime.now()
                 next_month = today.replace(month=today.month + 1 if today.month < 12 else 1,
                                            year=today.year if today.month < 12 else today.year + 1,
                                            day=1)
                 next_month_end = (next_month.replace(month=next_month.month + 1 if next_month.month < 12 else 1,
                                                      year=next_month.year if next_month.month < 12 else next_month.year + 1) -
                                   timedelta(days=1))
-
                 cleaned["start_date"] = next_month.strftime("%Y-%m-%d")
                 cleaned["end_date"] = next_month_end.strftime("%Y-%m-%d")
-
                 confidence_levels["start_date"] = "inferred"
                 confidence_levels["end_date"] = "inferred"
-
             elif date_reference == "this_weekend":
-                # Calculate dates for this weekend but mark as inferred
-                today = datetime.now()
                 days_until_saturday = (5 - today.weekday()) % 7
                 saturday = today + timedelta(days=days_until_saturday)
                 sunday = saturday + timedelta(days=1)
-
                 cleaned["start_date"] = saturday.strftime("%Y-%m-%d")
                 cleaned["end_date"] = sunday.strftime("%Y-%m-%d")
-
                 confidence_levels["start_date"] = "inferred"
                 confidence_levels["end_date"] = "inferred"
 
