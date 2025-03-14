@@ -85,6 +85,7 @@ def main():
                     unsafe_allow_html=True)
 
         # Trip details display
+        # Trip details display
         st.write("As I understand them so far:")
 
         if st.session_state.trip_details:
@@ -92,6 +93,10 @@ def main():
 
             if details.get("destination"):
                 st.markdown(f"**Destination:** {details['destination']}")
+            if details.get("origin"):
+                st.markdown(f"**Origin:** {details['origin']}")
+            else:
+                st.markdown("**Origin:** *Not provided (Required)*")
 
             if details.get("start_date") and details.get("end_date"):
                 st.markdown(f"**Dates:** {details['start_date']} to {details['end_date']}")

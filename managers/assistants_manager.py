@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
 from openai import OpenAI
@@ -61,38 +62,41 @@ class AssistantsManager:
             assistant = self.client.beta.assistants.create(
                 name=ASSISTANT_NAME,
                 instructions="""
-                You are a helpful travel planning assistant. 
-                Help users plan trips by gathering information about:
-                - destination (REQUIRED)
-                - start date (REQUIRED): accept any date format the user provides
-                - end date (REQUIRED): accept any date format the user provides
-                - number of travelers (REQUIRED): pay attention if user already mentioned this
-                - budget (OPTIONAL but important): This is the TOTAL budget for the entire trip, not per night
-                - activity preferences (OPTIONAL but important): What the user wants to do at the destination
+                    You are a helpful travel planning assistant. 
+                    Help users plan trips by gathering information about:
+                    - origin (REQUIRED): Provide the departure city from where you are starting your journey.
+                    - destination (REQUIRED)
+                    - start date (REQUIRED): accept any date format the user provides
+                    - end date (REQUIRED): accept any date format the user provides
+                    - number of travelers (REQUIRED): pay attention if user already mentioned this
+                    - budget (OPTIONAL but important): This is the TOTAL budget for the entire trip, not per night
+                    - activity preferences (OPTIONAL but important): What the user wants to do at the destination
 
-                IMPORTANT WORKFLOW:
-                1. COLLECTION PHASE: First, collect ALL required information and try to collect optional information
-                2. CONFIRMATION PHASE: Once you have all required information, ask the user to confirm
-                3. PLANNING PHASE: Only after explicit confirmation should you use the tools to generate an itinerary
+                    IMPORTANT WORKFLOW:
+                    1. COLLECTION PHASE: First, collect ALL required information and try to collect optional information
+                    2. CONFIRMATION PHASE: Once you have all required information, ask the user to confirm
+                    3. PLANNING PHASE: Only after explicit confirmation should you use the tools to generate an itinerary
 
-                GUIDELINES:
-                1. Accept dates in any natural format users provide (like "March 2nd", "next week", etc.)
-                2. Only suggest travel dates within the next 6 months as our systems can't book further ahead
-                3. If a user says "I'm with X people" or similar, count the total correctly (user + X people)
-                4. Don't ask for information the user has already provided
-                5. Never proceed to confirmation until you have all required fields
-                6. Always try to collect optional fields before confirmation for a better experience
-                7. When the system tells you what fields are missing, focus on collecting those specific fields
+                    GUIDELINES:
+                    1. Accept dates in any natural format users provide (like "March 2nd", "next week", etc.)
+                    2. Only suggest travel dates within the next 6 months as our systems can't book further ahead
+                    3. If a user says "I'm with X people" or similar, count the total correctly (user + X people)
+                    4. Don't ask for information the user has already provided
+                    5. Ask where the user is starting its journey from. Ask for origin city.
+                    6. Never proceed to confirmation until you have all required fields.
+                    7. Always try to collect optional fields before confirmation for a better experience.
+                    8. When the system tells you what fields are missing, focus on collecting those specific fields.
 
-                When confirming details, format the confirmation as a clear summary of all the collected information
-                about their trip (both required and optional), and explicitly ask if they want to proceed with planning.
+                    When confirming details, format the confirmation as a clear summary of all the collected information
+                    about their trip (both required and optional), and explicitly ask if they want to proceed with planning.
 
-                Only after receiving explicit confirmation AND having all required fields should you use the tools to 
-                generate an itinerary.
+                    Only after receiving explicit confirmation AND having all required fields should you use the tools to 
+                    generate an itinerary.
 
-                When using the get_hotels function, calculate a reasonable per-night budget based on the 
-                total trip budget (if provided) and the duration of stay.
-                """,
+                    When using the get_hotels function, calculate a reasonable per-night budget based on the 
+                    total trip budget (if provided) and the duration of stay.
+                    """,
+
                 model=CONVERSATION_MODEL,
                 tools=[
                     {
@@ -103,6 +107,10 @@ class AssistantsManager:
                             "parameters": {
                                 "type": "object",
                                 "properties": {
+                                    "origin": {
+                                        "type": "string",
+                                        "description": "The departure city or airport"
+                                    },
                                     "destination": {
                                         "type": "string",
                                         "description": "The destination city"
@@ -116,7 +124,7 @@ class AssistantsManager:
                                         "description": "Number of travelers"
                                     }
                                 },
-                                "required": ["destination", "start_date", "travelers"]
+                                "required": ["origin","destination", "start_date", "travelers"]
                             }
                         }
                     },
@@ -277,12 +285,27 @@ class AssistantsManager:
         # Extract entities from message with context from existing details
         extracted_details = self.extractor.extract(message, existing_details=existing_trip_details)
         logger.info(f"Extracted details: {extracted_details.to_dict()}")
+        if not extracted_details.origin:
+            logger.warning("Origin is missing from extracted details. Please ask the user for the departure city.")
 
         # Update session data with extracted details
         self.session_repository.update_trip_details(session_id, extracted_details.to_dict())
 
         # Get updated trip details after extraction
         trip_details = self.session_repository.get_trip_details(session_id)
+        trip_dict = trip_details.to_dict()
+
+        # Check for date errors in the trip details and prompt the user to correct them if found.
+        if trip_dict.get("start_date_error") or trip_dict.get("end_date_error"):
+            error_msg = "There seems to be an issue with your dates. "
+            if trip_dict.get("start_date_error"):
+                error_msg += trip_dict["start_date_error"] + " "
+            if trip_dict.get("end_date_error"):
+                error_msg += trip_dict["end_date_error"]
+            return {
+                "response": error_msg,
+                "extracted_data": trip_dict
+            }
 
         # Check what information is still missing
         missing_required = trip_details.missing_required_fields()
@@ -290,11 +313,11 @@ class AssistantsManager:
 
         # Only set confirmation if all required fields are present and user has confirmed
         if self._check_confirmation(message) and trip_details.is_ready_for_confirmation():
-            logger.info(f"Detected confirmation in user message and all required fields present")
+            logger.info("Detected confirmation in user message and all required fields present")
             self.session_repository.set_confirmed(session_id, True)
         elif self._check_confirmation(message) and not trip_details.is_ready_for_confirmation():
             logger.warning(f"User attempted to confirm but missing required fields: {missing_required}")
-            # We don't set confirmation flag if required fields are missing
+            # Do not set confirmation if required fields are missing
 
         # Add context as a system message with trip details and missing fields
         if trip_details and any(value is not None for value in trip_details.__dict__.values()):
@@ -303,12 +326,11 @@ class AssistantsManager:
                 if value is not None:
                     context_msg += f"- {key}: {value}\n"
 
-            # Add information about missing fields if any
+            # Append missing fields information if any
             if missing_required or missing_optional:
                 context_msg += "\n" + self._create_missing_fields_message(missing_required, missing_optional)
             else:
                 context_msg += "\nAll required and optional fields have been collected. You can now confirm details with the user."
-
             context_msg += "\n\nPlease use this information and avoid asking for details that have already been provided."
 
             self.client.beta.threads.messages.create(
@@ -316,7 +338,7 @@ class AssistantsManager:
                 role="user",
                 content=context_msg
             )
-            logger.info(f"Added context message with detected trip details and missing fields")
+            logger.info("Added context message with detected trip details and missing fields")
 
         # Add the user's original message to the thread
         self.client.beta.threads.messages.create(
@@ -347,7 +369,7 @@ class AssistantsManager:
 
             # Handle tool calls if needed
             if run.status == "requires_action":
-                logger.info(f"Run requires action")
+                logger.info("Run requires action")
                 tool_outputs = []
 
                 for tool_call in run.required_action.submit_tool_outputs.tool_calls:
@@ -375,6 +397,7 @@ class AssistantsManager:
                         should_block = True
                         block_reason = f"Missing required fields: {', '.join(missing_required)}"
                     elif function_name == "get_flights" and (not trip_details.destination or
+                                                             not trip_details.origin or
                                                              not trip_details.start_date or
                                                              not trip_details.travelers):
                         should_block = True
@@ -395,11 +418,13 @@ class AssistantsManager:
                         result = None
 
                         if function_name == "get_flights":
+                            origin = arguments.get("origin")
                             destination = arguments.get("destination")
                             start_date = arguments.get("start_date")
                             travelers = arguments.get("travelers")
 
                             result = self.flight_service.get_flights(
+                                origin,
                                 destination,
                                 start_date,
                                 travelers
@@ -411,7 +436,6 @@ class AssistantsManager:
                             end_date = arguments.get("end_date")
                             budget = arguments.get("budget")
 
-                            # If budget is missing, use default
                             result = self.hotel_service.get_hotels(
                                 destination,
                                 start_date,
@@ -432,7 +456,6 @@ class AssistantsManager:
                             start_date = arguments.get("start_date")
                             end_date = arguments.get("end_date")
 
-                            from datetime import datetime
                             try:
                                 start = datetime.strptime(start_date, "%Y-%m-%d")
                                 end = datetime.strptime(end_date, "%Y-%m-%d")
@@ -447,7 +470,7 @@ class AssistantsManager:
                     })
 
                 # Submit tool outputs
-                logger.info(f"Submitting tool outputs")
+                logger.info("Submitting tool outputs")
                 run = self.client.beta.threads.runs.submit_tool_outputs(
                     thread_id=thread_id,
                     run_id=run.id,

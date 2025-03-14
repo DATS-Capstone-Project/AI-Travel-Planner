@@ -5,7 +5,7 @@ from typing import Optional, Dict, List
 @dataclass
 class TripDetails:
     """Data model for trip details extracted from user messages"""
-
+    origin: Optional[str] = None
     destination: Optional[str] = None
     start_date: Optional[str] = None  # ISO format: YYYY-MM-DD
     end_date: Optional[str] = None  # ISO format: YYYY-MM-DD
@@ -38,6 +38,8 @@ class TripDetails:
         missing = []
         if not self.destination:
             missing.append("destination")
+        if not self.origin:
+            missing.append("origin")
         if not self.start_date:
             missing.append("start date")
         if not self.end_date:
@@ -68,6 +70,8 @@ class TripDetails:
         fields = []
         if self.destination:
             fields.append(f"Destination: {self.destination}")
+        if self.origin:
+            fields.append(f"Origin: {self.origin}")
         if self.start_date:
             fields.append(f"Start Date: {self.start_date}")
         if self.end_date:

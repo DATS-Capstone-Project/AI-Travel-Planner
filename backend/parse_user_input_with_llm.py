@@ -29,6 +29,7 @@ def parse_user_input_with_llm(user_input: str) -> dict:
     system_prompt = """
     You are a helpful assistant that extracts the following information from the user's message if available:
     - destination (string)
+    - origin (string)
     - start_date (string, in YYYY-MM-DD format)
     - end_date (string, in YYYY-MM-DD format)
     - travelers (integer)
@@ -40,6 +41,7 @@ def parse_user_input_with_llm(user_input: str) -> dict:
 
     Example valid response:
     {
+      "origin": "Mumbai"
       "destination": "Paris",
       "start_date": "2025-03-21",
       "end_date": "2025-03-23",
@@ -65,6 +67,7 @@ def parse_user_input_with_llm(user_input: str) -> dict:
     except Exception as e:
         print("DEBUG: Exception during API call or JSON parsing:", e)
         data = {
+            "origin": None,
             "destination": None,
             "start_date": None,
             "end_date": None,
