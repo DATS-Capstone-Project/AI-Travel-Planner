@@ -47,7 +47,7 @@ async def chat(request: ChatRequest):
     """
     try:
         # Process the message using the Assistants API
-        result = assistants_manager.process_message(
+        result = await assistants_manager.process_message(
             request.session_id,
             request.message
         )
