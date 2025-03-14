@@ -8,11 +8,12 @@ logger = logging.getLogger(__name__)
 class FlightService:
     """Service for handling flight-related operations"""
 
-    def get_flights(self, destination: str, start_date: str, travelers: int) -> str:
+    def get_flights(self, origin: str, destination: str, start_date: str, travelers: int) -> str:
         """
         Get flight information for a trip
 
         Args:
+            origin: Origin city
             destination: Destination city
             start_date: Departure date in YYYY-MM-DD format
             travelers: Number of travelers
@@ -20,7 +21,7 @@ class FlightService:
         Returns:
             Flight information string
         """
-        logger.info(f"Getting flights to {destination} on {start_date} for {travelers} travelers")
+        logger.info(f"Getting flights from {origin} to {destination} on {start_date} for {travelers} travelers")
 
         # In a real implementation, this would call an external API
         # For now, we return mock data
