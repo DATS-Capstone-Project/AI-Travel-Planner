@@ -1,28 +1,122 @@
+# services/travel/flight_service.py
+
+import os
 import logging
 from typing import Optional
+from amadeus import Client, ResponseError
+from dotenv import load_dotenv
+load_dotenv()
 
-# Configure logger
+
 logger = logging.getLogger(__name__)
 
-
 class FlightService:
-    """Service for handling flight-related operations"""
+    """Service for handling flight-related operations using Amadeus API."""
+
+    def __init__(self):
+        """
+        Initialize the Amadeus client using environment variables.
+        """
+        self.amadeus = Client(
+            client_id=os.getenv("AMADEUS_CLIENT_ID"),
+            client_secret=os.getenv("AMADEUS_CLIENT_SECRET"),
+            log_level="debug" 
+        )
+
+    def _get_iata_code(self, location: str) -> str:
+        """
+        Resolve a city name to an IATA code using Amadeus API. If the input is already a 3-letter code,
+        it returns the code in uppercase.
+
+        Args:
+            location: City name or IATA code.
+
+        Returns:
+            IATA code in uppercase.
+        """
+        # If the input is already a valid IATA code, return it.
+        if len(location) == 3 and location.isalpha():
+            return location.upper()
+
+        try:
+            response = self.amadeus.reference_data.locations.get(
+                keyword=location,
+                subType="CITY"
+            )
+            data = response.data
+            if data and "iataCode" in data[0]:
+                return data[0]["iataCode"].upper()
+            else:
+                logger.warning(f"No IATA code found for location: {location}. Using input value.")
+                return location.upper()
+        except ResponseError as error:
+            logger.error(f"Error fetching IATA code for {location}: {error}")
+            return location.upper()
 
     def get_flights(self, origin: str, destination: str, start_date: str, travelers: int) -> str:
         """
-        Get flight information for a trip
+        Query Amadeus API for flight offers from origin to destination on start_date,
+        for the given number of travelers.
 
         Args:
-            origin: Origin city
-            destination: Destination city
-            start_date: Departure date in YYYY-MM-DD format
-            travelers: Number of travelers
+            origin: City name or IATA code of the origin.
+            destination: City name or IATA code of the destination.
+            start_date: Departure date in 'YYYY-MM-DD' format.
+            travelers: Number of adult travelers.
 
         Returns:
-            Flight information string
+            A string summarizing flight offers, or an error message.
         """
-        logger.info(f"Getting flights from {origin} to {destination} on {start_date} for {travelers} travelers")
+        origin_code = self._get_iata_code(origin)
+        destination_code = self._get_iata_code(destination)
 
-        # In a real implementation, this would call an external API
-        # For now, we return mock data
-        return f"Flights to {destination} on {start_date} for {travelers} travelers: Economy from $300"
+        logger.info(
+            f"Fetching flight data with Amadeus from {origin_code} to {destination_code} on {start_date} for {travelers} traveler(s)."
+        )
+
+        try:
+            response = self.amadeus.shopping.flight_offers_search.get(
+                originLocationCode=origin_code,
+                destinationLocationCode=destination_code,
+                departureDate=start_date,
+                adults=travelers,
+                currencyCode="USD",
+                max=5  # Limit to a few flight offers for demonstration
+            )
+
+            flight_offers = response.data
+            if not flight_offers:
+                return f"No flights found for {origin_code} → {destination_code} on {start_date}."
+
+            results_summary = []
+            for idx, offer in enumerate(flight_offers, start=1):
+                price = offer["price"]["grandTotal"]
+                currency = offer["price"]["currency"]
+
+                itineraries = offer.get("itineraries", [])
+                if not itineraries:
+                    continue
+
+                first_itinerary = itineraries[0]
+                segments = first_itinerary.get("segments", [])
+                if not segments:
+                    continue
+
+                departure_iata = segments[0]["departure"].get("iataCode")
+                departure_time = segments[0]["departure"].get("at")
+                arrival_iata = segments[-1]["arrival"].get("iataCode")
+                arrival_time = segments[-1]["arrival"].get("at")
+
+                offer_text = (
+                    f"Option {idx}:\n"
+                    f" - Price: {price} {currency}\n"
+                    f" - Departure: {departure_iata} at {departure_time}\n"
+                    f" - Arrival: {arrival_iata} at {arrival_time}\n"
+                )
+                results_summary.append(offer_text)
+
+            return "\n".join(results_summary)
+
+        except ResponseError as error:
+            logger.error(f"Amadeus Flight API error: {error}")
+            return f"Error fetching flights from Amadeus: {error}"
