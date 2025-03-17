@@ -64,6 +64,7 @@ class TravelSupervisor:
         # Add nodes
         workflow.add_node("start", self._supervisor_start)
         workflow.add_node("parallel_booking", self._run_parallel_agents)
+        # Should add a node here before crating the itinerary to check the budget and if the user wants to change it if the min(budget) > the budget of the user
         workflow.add_node("create_itinerary", self._create_itinerary)
         workflow.add_node("finish", self._supervisor_finish)
 
