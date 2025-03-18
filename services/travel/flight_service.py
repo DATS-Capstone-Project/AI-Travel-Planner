@@ -80,6 +80,7 @@ class FlightService:
                 return fallback_mapping[loc_upper]
             return loc_upper
 
+
     async def get_best_flight(self, extracted_details: Dict[str, Any]) -> str:
         """
         Use extracted trip details to query the Amadeus API for flight offers,
@@ -195,4 +196,15 @@ class FlightService:
         
         return human_message
 
-
+    async def get_flights(self, *, origin: str, destination: str, start_date: str, travelers: int) -> str:
+        """
+        A wrapper method to allow the supervisor to call get_flights with keyword arguments.
+        It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
+        """
+        extracted_details = {
+            "origin": origin,
+            "destination": destination,
+            "start_date": start_date,
+            "travelers": travelers
+        }
+        return await self.get_best_flight(extracted_details)
