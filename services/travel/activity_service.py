@@ -46,7 +46,7 @@ class ActivityService:
             return "British Museum, Tower of London, Westminster Abbey"
         elif "rome" in destination:
             return "Colosseum, Vatican Museums, Trevi Fountain"
-        elif "istanbul" in destination:
-            return "Hagia Sophia, Topkapi Palace, Grand Bazaar, Bosphorus Cruise"
+        elif "Bengaluru" in destination:
+            return "Hello, Hellllo, Bengaluru, RCB, DKS"
         else:
             return "City Tour, Local Museums, Cultural Experiences"

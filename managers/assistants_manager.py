@@ -1,7 +1,6 @@
+import asyncio
 import json
 import logging
-import time
-from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
 from openai import OpenAI
@@ -11,6 +10,7 @@ from services.extraction.extractor_factory import ExtractorFactory
 from services.travel.activity_service import ActivityService
 from services.travel.flight_service import FlightService
 from services.travel.hotel_service import HotelService
+from services.supervisors.travel_supervisor import TravelSupervisor
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -44,6 +44,12 @@ class AssistantsManager:
         self.activity_service = activity_service
         self.extractor = ExtractorFactory.create_extractor(extractor_type)
         self.assistant_id = self._create_or_get_assistant()
+        # Initialize the supervisor
+        self.travel_supervisor = TravelSupervisor(
+            flight_service=flight_service,
+            hotel_service=hotel_service,
+            activity_service=activity_service
+        )
 
     def _create_or_get_assistant(self) -> str:
         """Create or retrieve the travel planning assistant"""
@@ -75,7 +81,7 @@ class AssistantsManager:
                     IMPORTANT WORKFLOW:
                     1. COLLECTION PHASE: First, collect ALL required information and try to collect optional information
                     2. CONFIRMATION PHASE: Once you have all required information, ask the user to confirm
-                    3. PLANNING PHASE: Only after explicit confirmation should you use the tools to generate an itinerary
+                    3. PLANNING PHASE: When the user confirms, let them know you're now working on their travel plan
 
                     GUIDELINES:
                     1. Accept dates in any natural format users provide (like "March 2nd", "next week", etc.)
@@ -90,94 +96,14 @@ class AssistantsManager:
                     When confirming details, format the confirmation as a clear summary of all the collected information
                     about their trip (both required and optional), and explicitly ask if they want to proceed with planning.
 
-                    Only after receiving explicit confirmation AND having all required fields should you use the tools to 
+                    Only after receiving explicit confirmation AND having all required fields should you use handoff to the supervisor agent to
                     generate an itinerary.
-
-                    When using the get_hotels function, calculate a reasonable per-night budget based on the 
-                    total trip budget (if provided) and the duration of stay.
+                    
+                    After the user confirms all trip details, do not validate dates or call any tools. Immediately proceed to planning the itinerary with the supervisor agent
                     """,
 
                 model=CONVERSATION_MODEL,
                 tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_flights",
-                            "description": "Get flight information for a trip",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "origin": {
-                                        "type": "string",
-                                        "description": "The departure city or airport"
-                                    },
-                                    "destination": {
-                                        "type": "string",
-                                        "description": "The destination city"
-                                    },
-                                    "start_date": {
-                                        "type": "string",
-                                        "description": "The departure date in YYYY-MM-DD format"
-                                    },
-                                    "travelers": {
-                                        "type": "integer",
-                                        "description": "Number of travelers"
-                                    }
-                                },
-                                "required": ["origin","destination", "start_date", "travelers"]
-                            }
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_hotels",
-                            "description": "Get hotel information for a trip",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "destination": {
-                                        "type": "string",
-                                        "description": "The destination city"
-                                    },
-                                    "start_date": {
-                                        "type": "string",
-                                        "description": "Check-in date in YYYY-MM-DD format"
-                                    },
-                                    "end_date": {
-                                        "type": "string",
-                                        "description": "Check-out date in YYYY-MM-DD format"
-                                    },
-                                    "budget": {
-                                        "type": "integer",
-                                        "description": "Budget per night in USD"
-                                    }
-                                },
-                                "required": ["destination", "start_date", "end_date"]
-                            }
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_activities",
-                            "description": "Get activity recommendations for a destination",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "destination": {
-                                        "type": "string",
-                                        "description": "The destination city"
-                                    },
-                                    "preferences": {
-                                        "type": "string",
-                                        "description": "User activity preferences"
-                                    }
-                                },
-                                "required": ["destination"]
-                            }
-                        }
-                    },
                     {
                         "type": "function",
                         "function": {
@@ -264,7 +190,7 @@ class AssistantsManager:
         context_msg += "\nPlease ask the user about these specific fields in a natural, conversational way."
         return context_msg
 
-    def process_message(self, session_id: str, message: str) -> Dict[str, Any]:
+    async def process_message(self, session_id: str, message: str) -> Dict[str, Any]:
         """
         Process a user message using the Assistants API
 
@@ -296,8 +222,7 @@ class AssistantsManager:
         trip_dict = trip_details.to_dict()
 
         # Check for date errors in the trip details and prompt the user to correct them if found.
-        if trip_dict.get("start_date")=="Error" or trip_dict.get("end_date")=="Error":
-
+        if trip_dict.get("start_date") == "Error" or trip_dict.get("end_date") == "Error":
             return {
                 "response": "Please ensure your start date is in the future and within the next 6 months, and that your end date is later than your start date and also within the next 6 months. Also, check if your end date is after your start date.",
                 "extracted_data": trip_dict
@@ -309,8 +234,42 @@ class AssistantsManager:
 
         # Only set confirmation if all required fields are present and user has confirmed
         if self._check_confirmation(message) and trip_details.is_ready_for_confirmation():
-            logger.info("Detected confirmation in user message and all required fields present")
+            logger.info(f"Detected confirmation in user message and all required fields present")
             self.session_repository.set_confirmed(session_id, True)
+
+            # HANDOFF TO SUPERVISOR AGENT after confirmation
+            if self.session_repository.is_confirmed(session_id):
+                logger.info(f"Handing off to supervisor agent for session {session_id}")
+
+                # Add a message to the thread informing the user about handoff
+                self.client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content="System note: User confirmed trip details. Handing off to planning supervisor."
+                )
+
+                # Call supervisor agent
+                try:
+                    # Call the supervisor agent with the trip details
+                    supervisor_result = await self.travel_supervisor.plan_trip(
+                        session_id=session_id,
+                        trip_details=trip_details
+                    )
+
+                    logger.info(f"Supervisor agent completed planning: {supervisor_result}")
+
+                    # Return the supervisor's response
+                    return {
+                        "response": supervisor_result.get("itinerary",
+                                                          "I've created your travel plan based on your preferences."),
+                        "extracted_data": trip_details.to_dict()
+                    }
+                except Exception as e:
+                    logger.error(f"Error in supervisor agent: {e}")
+                    return {
+                        "response": "I'm sorry, but I encountered an error while planning your trip. Please try again.",
+                        "extracted_data": trip_details.to_dict()
+                    }
         elif self._check_confirmation(message) and not trip_details.is_ready_for_confirmation():
             logger.warning(f"User attempted to confirm but missing required fields: {missing_required}")
             # Do not set confirmation if required fields are missing
@@ -354,7 +313,7 @@ class AssistantsManager:
         # Poll for the run to complete
         while run.status in ["queued", "in_progress", "requires_action"]:
             # Short sleep to avoid hammering the API
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
             run = self.client.beta.threads.runs.retrieve(
                 thread_id=thread_id,
@@ -363,9 +322,9 @@ class AssistantsManager:
 
             logger.debug(f"Run status: {run.status}")
 
-            # Handle tool calls if needed
+            # Handle tool calls if needed - we only have validate_dates now
             if run.status == "requires_action":
-                logger.info("Run requires action")
+                logger.info(f"Run requires action")
                 tool_outputs = []
 
                 for tool_call in run.required_action.submit_tool_outputs.tool_calls:
@@ -373,100 +332,27 @@ class AssistantsManager:
                     arguments_str = tool_call.function.arguments
                     arguments = json.loads(arguments_str)
 
-                    logger.info(f"Tool call: {function_name}")
-                    logger.info(f"Arguments: {json.dumps(arguments, indent=2)}")
+                    # We only handle validate_dates now
+                    if function_name == "validate_dates":
+                        start_date = arguments.get("start_date")
+                        end_date = arguments.get("end_date")
 
-                    # Check if this is a travel planning tool call that needs confirmation
-                    requires_confirmation = function_name in ["get_flights", "get_hotels", "get_activities"]
+                        from datetime import datetime
+                        try:
+                            start = datetime.strptime(start_date, "%Y-%m-%d")
+                            end = datetime.strptime(end_date, "%Y-%m-%d")
+                            result = str(end > start)
+                        except Exception as e:
+                            logger.error(f"Date validation error: {e}")
+                            result = "False"
 
-                    # Block tools if:
-                    # 1. User hasn't confirmed OR
-                    # 2. Required fields are missing OR
-                    # 3. Tool-specific required fields are missing
-                    should_block = False
-                    block_reason = ""
-
-                    if requires_confirmation and not self.session_repository.is_confirmed(session_id):
-                        should_block = True
-                        block_reason = "User has not confirmed trip details yet."
-                    elif requires_confirmation and not trip_details.is_ready_for_confirmation():
-                        should_block = True
-                        block_reason = f"Missing required fields: {', '.join(missing_required)}"
-                    elif function_name == "get_flights" and (not trip_details.destination or
-                                                             not trip_details.origin or
-                                                             not trip_details.start_date or
-                                                             not trip_details.travelers):
-                        should_block = True
-                        block_reason = "Missing required fields for flight booking."
-                    elif function_name == "get_hotels" and (not trip_details.destination or
-                                                            not trip_details.start_date or
-                                                            not trip_details.end_date):
-                        should_block = True
-                        block_reason = "Missing required fields for hotel booking."
-
-                    if should_block:
-                        logger.info(f"Blocking {function_name} call: {block_reason}")
-                        result = json.dumps({
-                            "error": f"{block_reason} Please collect all required information and ask for confirmation before proceeding."
+                        tool_outputs.append({
+                            "tool_call_id": tool_call.id,
+                            "output": result
                         })
-                    else:
-                        # Process the tool call as normal
-                        result = None
-
-                        if function_name == "get_flights":
-                            origin = arguments.get("origin")
-                            destination = arguments.get("destination")
-                            start_date = arguments.get("start_date")
-                            travelers = arguments.get("travelers")
-
-                            result = self.flight_service.get_flights(
-                                origin,
-                                destination,
-                                start_date,
-                                travelers
-                            )
-
-                        elif function_name == "get_hotels":
-                            destination = arguments.get("destination")
-                            start_date = arguments.get("start_date")
-                            end_date = arguments.get("end_date")
-                            budget = arguments.get("budget")
-
-                            result = self.hotel_service.get_hotels(
-                                destination,
-                                start_date,
-                                end_date,
-                                budget
-                            )
-
-                        elif function_name == "get_activities":
-                            destination = arguments.get("destination")
-                            preferences = arguments.get("preferences", "")
-
-                            result = self.activity_service.get_activities(
-                                destination,
-                                preferences
-                            )
-
-                        elif function_name == "validate_dates":
-                            start_date = arguments.get("start_date")
-                            end_date = arguments.get("end_date")
-
-                            try:
-                                start = datetime.strptime(start_date, "%Y-%m-%d")
-                                end = datetime.strptime(end_date, "%Y-%m-%d")
-                                result = str(end > start)
-                            except Exception as e:
-                                logger.error(f"Date validation error: {e}")
-                                result = "False"
-
-                    tool_outputs.append({
-                        "tool_call_id": tool_call.id,
-                        "output": result
-                    })
 
                 # Submit tool outputs
-                logger.info("Submitting tool outputs")
+                logger.info(f"Submitting tool outputs")
                 run = self.client.beta.threads.runs.submit_tool_outputs(
                     thread_id=thread_id,
                     run_id=run.id,
