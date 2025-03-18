@@ -80,6 +80,7 @@ class FlightService:
                 return fallback_mapping[loc_upper]
             return loc_upper
 
+
     async def get_best_flight(self, extracted_details: Dict[str, Any]) -> str:
         """
         Use extracted trip details to query the Amadeus API for flight offers,
@@ -122,7 +123,6 @@ class FlightService:
             logger.error(f"Amadeus Flight API error: {error}")
             return f"Error fetching flights from Amadeus: {error}"
         
-        # Process each offer to extract key details.
         processed_offers: List[Dict[str, Any]] = []
         for idx, offer in enumerate(flight_offers, start=1):
             try:
@@ -143,8 +143,16 @@ class FlightService:
             
             segment_details = []
             for seg in segments:
+                carrier_code = seg.get("carrierCode", "N/A")
+                # Lookup carrier full name from dictionaries if available.
+                carrier_full = carrier_code
+                if dictionaries and "carriers" in dictionaries:
+                    carrier_full = dictionaries["carriers"].get(carrier_code, carrier_code)
+                # Format as: FullName (Code)
+                carrier_display = f"{carrier_full} ({carrier_code})"
+                
                 segment_details.append({
-                    "carrier": seg.get("carrierCode", "N/A"),
+                    "carrier": carrier_display,
                     "flight_number": seg.get("flightNumber", "N/A"),
                     "departure_iata": seg["departure"].get("iataCode", "N/A"),
                     "departure_time": seg["departure"].get("at", "N/A"),
@@ -165,21 +173,20 @@ class FlightService:
         raw_offers_json = json.dumps(processed_offers, indent=2)
         logger.info(f"Processed flight offers JSON: {raw_offers_json}")
         
-        # Build a prompt for the LLM to generate a plain language summary message.
         prompt = (
             "You are a seasoned travel advisor with expertise in flight planning. "
-            "Given the following JSON data of flight offers, generate a detailed, plain language summary that includes the exact details of each flight offer. "
-            "For each flight offer, include the following details:\n"
+            "Given the following JSON data of flight offers, generate a detailed, plain language summary message "
+            "that provides the exact details for each flight offer. For each flight, include:\n"
             "- Price (with currency)\n"
             "- Total flight duration (in minutes)\n"
             "- Number of layovers\n"
             "- Cabin class\n"
-            "- For each segment, include the carrier name, flight number, aircraft model (if available), departure and arrival airport codes, and departure and arrival times\n"
-            "Also, if there are any alternative or nearby airport options based on the provided dictionaries, mention them.\n\n"
-            "Do not refer to the offers as 'Option 1', 'Option 2', etc. Instead, provide a clear summary for each offer with all the above details.\n\n"
+            "- For each flight segment, include the carrier (as the full name with the code in parentheses), "
+            "flight number, aircraft model (if available), departure and arrival airport codes, and departure and arrival times.\n"
+            "Also mention any alternative or nearby airport options if available from the dictionaries data.\n\n"
             "Here is the flight offers JSON data:\n\n"
             f"{raw_offers_json}\n\n"
-            "Return the summary as a plain text message."
+            "Return your answer as a clear plain text message without referring to options by number."
         )
         
         messages = [HumanMessage(content=prompt)]
@@ -189,3 +196,15 @@ class FlightService:
         
         return human_message
 
+    async def get_flights(self, *, origin: str, destination: str, start_date: str, travelers: int) -> str:
+        """
+        A wrapper method to allow the supervisor to call get_flights with keyword arguments.
+        It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
+        """
+        extracted_details = {
+            "origin": origin,
+            "destination": destination,
+            "start_date": start_date,
+            "travelers": travelers
+        }
+        return await self.get_best_flight(extracted_details)
