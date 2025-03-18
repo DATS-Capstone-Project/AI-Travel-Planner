@@ -1,28 +1,26 @@
-# test_flight_agent.py
+# test_flight_service.py
 
 import os
+import asyncio
+from dotenv import load_dotenv
 from services.travel.flight_service import FlightService
 
 def main():
-    # Set environment variables for testing (optional if already set in your .env file)
-    os.environ["AMADEUS_API_KEY"] = "YourAmadeusAPIKeyHere"
-    os.environ["AMADEUS_API_SECRET"] = "YourAmadeusAPISecretHere"
-    
-    # Initialize the FlightService
+    load_dotenv()
     flight_service = FlightService()
 
-    # Define test parameters: you can use either city names or IATA codes.
-    origin = "New York"       # Will be resolved to an IATA code (e.g., NYC)
-    destination = "London"    # Will be resolved to an IATA code (e.g., LON)
-    start_date = "2025-03-25"   # Departure date in YYYY-MM-DD format
-    travelers = 1             # Number of adult travelers
+    # Define sample extracted details.
+    extracted_details = {
+        "origin": "New York City",    # Expected to resolve to NYC via fallback.
+        "destination": "Bengaluru",   # Expected to resolve to BLR via fallback.
+        "start_date": "2025-03-21",     # Ensure this date is in the future relative to today.
+        "travelers": 1
+    }
 
-    # Call the flight agent
-    result = flight_service.get_flights(origin, destination, start_date, travelers)
-    
-    # Print the results
-    print("Flight search result:")
-    print(result)
+    # Run the asynchronous get_best_flight method.
+    flight_summary = asyncio.run(flight_service.get_best_flight(extracted_details))
+    print("Flight Summary:")
+    print(flight_summary)
 
 if __name__ == "__main__":
     main()
