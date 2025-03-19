@@ -14,7 +14,9 @@ from repositories.session_repository import SessionRepository
 from models.trip_details import TripDetails
 from config.settings import OPENAI_API_KEY, ASSISTANT_NAME, CONVERSATION_MODEL
 
+import ssl
 
+ssl._create_default_https_context = ssl._create_unverified_context
 # Configure logger
 logger = logging.getLogger(__name__)
 
