@@ -102,12 +102,13 @@ class TravelSupervisor:
 
         try:
             # Call flight service
-            flights = self.flight_service.get_flights(
-                origin=origin,
-                destination=destination,
-                start_date=start_date,
-                travelers=travelers
-            )
+            flights = await self.flight_service.get_flights(
+    origin=origin,
+    destination=destination,
+    start_date=start_date,
+    travelers=travelers
+)
+
 
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
