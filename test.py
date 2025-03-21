@@ -1,29 +1,26 @@
-# test_hotel_service.py
+# test_activity_service.py
 
 import os
 from dotenv import load_dotenv
-from services.travel.hotel_service import HotelService
+from services.travel.activity_service import ActivityService
 
 def main():
-    # Load environment variables from your .env file
+    # Load environment variables (ensure your .env file contains GOOGLE_PLACES_API_KEY)
     load_dotenv()
-    
-    # Create an instance of the HotelService
-    hotel_service = HotelService()
-    
-    # Define sample parameters:
-    destination = "Paris"           # Change this to any destination you want to test
-    start_date = "2025-03-23"         # Check-in date (YYYY-MM-DD)
-    end_date = "2025-03-27"           # Check-out date (YYYY-MM-DD)
-    # Optional: Specify a budget per night. If omitted, DEFAULT_BUDGET will be used.
-    budget = 150  # Example: $150 per night
-    
-    # Call the get_hotels method and capture the result
-    hotels_info = hotel_service.get_hotels(destination, start_date, end_date, budget)
-    
-    # Print the result to the console
-    print("Hotel Options:")
-    print(hotels_info)
+
+    # Create an instance of ActivityService
+    activity_service = ActivityService()
+
+    # Define test parameters
+    destination = "Paris"  # Change this as needed
+    preferences = None     # You can also set this to something like "art museums" if desired
+
+    # Get activity recommendations
+    activities = activity_service.get_activities(destination, preferences)
+
+    # Print the results
+    print("Activity Recommendations:")
+    print(activities)
 
 if __name__ == "__main__":
     main()
