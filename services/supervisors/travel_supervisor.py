@@ -110,6 +110,7 @@ class TravelSupervisor:
 )
 
 
+
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
             logger.info(f"✈️ Flights agent finished at: {end_time.strftime('%H:%M:%S')} (took {execution_time:.2f}s)")
@@ -221,7 +222,7 @@ class TravelSupervisor:
         # Use LLM to create a well-formatted itinerary
         messages = [
             HumanMessage(content=f"""
-            Create a comprehensive travel itinerary based on the following information:
+            Create a comprehensive travel itinerary based on the following information(give multiple options for the flights, hotels, and activities based on budget, comfort, luxury, economy, number of people ):
 
             TRIP DETAILS:
             {trip_details}
