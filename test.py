@@ -1,26 +1,29 @@
-# test_flight_service.py
+# test_hotel_service.py
 
 import os
-import asyncio
 from dotenv import load_dotenv
-from services.travel.flight_service import FlightService
+from services.travel.hotel_service import HotelService
 
 def main():
+    # Load environment variables from your .env file
     load_dotenv()
-    flight_service = FlightService()
-
-    # Define sample extracted details.
-    extracted_details = {
-        "origin": "New York City",    # Expected to resolve to NYC via fallback.
-        "destination": "Bengaluru",   # Expected to resolve to BLR via fallback.
-        "start_date": "2025-03-21",     # Ensure this date is in the future relative to today.
-        "travelers": 1
-    }
-
-    # Run the asynchronous get_best_flight method.
-    flight_summary = asyncio.run(flight_service.get_best_flight(extracted_details))
-    print("Flight Summary:")
-    print(flight_summary)
+    
+    # Create an instance of the HotelService
+    hotel_service = HotelService()
+    
+    # Define sample parameters:
+    destination = "Paris"           # Change this to any destination you want to test
+    start_date = "2025-03-23"         # Check-in date (YYYY-MM-DD)
+    end_date = "2025-03-27"           # Check-out date (YYYY-MM-DD)
+    # Optional: Specify a budget per night. If omitted, DEFAULT_BUDGET will be used.
+    budget = 150  # Example: $150 per night
+    
+    # Call the get_hotels method and capture the result
+    hotels_info = hotel_service.get_hotels(destination, start_date, end_date, budget)
+    
+    # Print the result to the console
+    print("Hotel Options:")
+    print(hotels_info)
 
 if __name__ == "__main__":
     main()
