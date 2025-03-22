@@ -2,6 +2,8 @@ import os
 import requests
 import logging
 from typing import Optional
+from langchain_core.messages import HumanMessage
+
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -57,7 +59,10 @@ class ActivityService:
                 summary = f"{name} (Rating: {rating}) - {address}"
                 activity_summaries.append(summary)
 
-            return " | ".join(activity_summaries)
+            activities_info = " | ".join(activity_summaries)
+            return HumanMessage(content=f"Activities in {destination}: {activities_info}")
+
         except Exception as e:
             logger.error(f"Exception in get_activities: {e}")
-            return f"Error fetching activities: {e}"
+            return HumanMessage(content=f"Error fetching activities: {e}")
+
