@@ -13,6 +13,9 @@ from services.travel.activity_service import ActivityService
 from repositories.session_repository import SessionRepository
 from models.trip_details import TripDetails
 from config.settings import OPENAI_API_KEY, ASSISTANT_NAME, CONVERSATION_MODEL
+from services.travel.distance_service import DistanceService
+
+
 
 
 # Configure logger
@@ -52,6 +55,8 @@ class TravelSupervisor:
         self.hotel_service = hotel_service
         self.activity_service = activity_service
         self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model=model_name, temperature=0)
+        self.distance_service = DistanceService()
+        self.logger = logging.getLogger(__name__)
 
         # Build the workflow graph
         self.workflow = self._build_workflow()
@@ -194,23 +199,56 @@ class TravelSupervisor:
             return {"activities": [{"error": str(e)}]}
 
     async def _run_parallel_agents(self, state: TravelState) -> Dict[str, Any]:
-        """Run flights, hotels, and activities agents in parallel"""
-        # Create tasks for all agents
+        # Run all agents in parallel
         flights_task = asyncio.create_task(self._flights_agent(state))
         hotels_task = asyncio.create_task(self._hotels_agent(state))
         activities_task = asyncio.create_task(self._activities_agent(state))
 
-        # Wait for all tasks to complete
         flights_result, hotels_result, activities_result = await asyncio.gather(
             flights_task, hotels_task, activities_task
         )
 
-        # Combine the results
-        return {
+        hotels_content = hotels_result.get("hotels", "")
+        activities_content = activities_result.get("activities", "")
+
+        # Default proximity message
+        proximity_message = "Could not determine hotel/activity proximity."
+
+        try:
+            hotels_list = hotels_content.split("|")
+            activities_list = activities_content.split("|")
+
+            # Call DistanceService
+            proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
+
+            proximity_message = proximity_human_msg.content
+
+            if "Recommend searching for closer hotels" in proximity_message:
+                # Refine hotels
+                refined_hotels_msg = self.hotel_service.get_hotels(
+                    destination=f"{state['trip_details']['destination']} city center",
+                    start_date=state["trip_details"]["start_date"],
+                    end_date=state["trip_details"]["end_date"],
+                    budget=state["trip_details"].get("budget")
+                )
+                hotels_content = refined_hotels_msg.content
+                proximity_message += "\nRefined hotel search applied."
+
+        except Exception as e:
+            self.logger.error(f"Proximity check failed: {e}")
+            proximity_message = f"Proximity check error: {e}"
+
+        # Update state
+        state.update({
             "flights": flights_result.get("flights", []),
-            "hotels": hotels_result.get("hotels", []),
-            "activities": activities_result.get("activities", [])
-        }
+            "hotels": hotels_content,
+            "activities": activities_content,
+            "proximity_check": proximity_message
+        })
+
+        return state
+
+
 
     async def _create_itinerary(self, state: TravelState) -> Dict[str, Any]:
         """Create a comprehensive itinerary from all collected data"""

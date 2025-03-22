@@ -1,52 +1,68 @@
+import os
+import requests
 import logging
 from typing import Optional
+from langchain_core.messages import HumanMessage
+
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
-
 class ActivityService:
-    """Service for handling activity-related operations"""
+    """Service for handling activity-related operations using the Google Places API."""
 
     def get_activities(self, destination: str, preferences: Optional[str] = None) -> str:
         """
-        Get activity recommendations for a destination
+        Get activity recommendations for a destination using the Google Places API.
 
         Args:
-            destination: Destination city
-            preferences: User activity preferences (optional)
+            destination: Destination city.
+            preferences: User activity preferences (optional).
 
         Returns:
-            Activity recommendations string
+            A string summarizing activity recommendations.
         """
         logger.info(f"Getting activities in {destination} with preferences: {preferences}")
+        google_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+        if not google_api_key:
+            logger.error("GOOGLE_PLACES_API_KEY not set in environment.")
+            return "Error: Google Places API key is not configured."
 
-        # In a real implementation, this would call an external API
-        # For now, we return mock data based on the destination
-        activities = self._get_mock_activities_for_destination(destination)
-
-        # If preferences are provided, filter activities
+        # Build the query. For example: "things to do in Paris" or include preferences.
+        query = f"things to do in {destination}"
         if preferences:
-            return f"Activities in {destination} matching '{preferences}': {activities}"
-        else:
-            return f"Popular activities in {destination}: {activities}"
+            query += f" {preferences}"
+        
+        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        params = {
+            "query": query,
+            "key": google_api_key,
+            "type": "tourist_attraction"
+        }
+        try:
+            response = requests.get(url, params=params)
+            if response.status_code != 200:
+                logger.error(f"Google Places API error: {response.status_code} {response.text}")
+                return f"Error: Unable to retrieve activity data (HTTP {response.status_code})."
 
-    def _get_mock_activities_for_destination(self, destination: str) -> str:
-        """Get mock activities based on destination"""
-        destination = destination.lower()
+            data = response.json()
+            results = data.get("results", [])
+            if not results:
+                return f"No activities found in {destination}."
 
-        # Return different activities based on the destination
-        if "new york" in destination:
-            return "Museum of Modern Art, Central Park Tour, Empire State Building"
-        elif "paris" in destination:
-            return "Eiffel Tower, Louvre Museum, Seine River Cruise"
-        elif "tokyo" in destination:
-            return "Shinjuku Gyoen, Tokyo Skytree, Meiji Shrine"
-        elif "london" in destination:
-            return "British Museum, Tower of London, Westminster Abbey"
-        elif "rome" in destination:
-            return "Colosseum, Vatican Museums, Trevi Fountain"
-        elif "Bengaluru" in destination:
-            return "Hello, Hellllo, Bengaluru, RCB, DKS"
-        else:
-            return "City Tour, Local Museums, Cultural Experiences"
+            # Build a summary string of the top 5 activity results.
+            activity_summaries = []
+            for result in results[:5]:
+                name = result.get("name", "Unknown")
+                address = result.get("formatted_address", "No address provided")
+                rating = result.get("rating", "No rating")
+                summary = f"{name} (Rating: {rating}) - {address}"
+                activity_summaries.append(summary)
+
+            activities_info = " | ".join(activity_summaries)
+            return HumanMessage(content=f"Activities in {destination}: {activities_info}")
+
+        except Exception as e:
+            logger.error(f"Exception in get_activities: {e}")
+            return HumanMessage(content=f"Error fetching activities: {e}")
+
