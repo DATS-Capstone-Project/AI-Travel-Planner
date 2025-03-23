@@ -208,8 +208,12 @@ class TravelSupervisor:
             flights_task, hotels_task, activities_task
         )
 
-        hotels_content = hotels_result.get("hotels", "")
-        activities_content = activities_result.get("activities", "")
+        # Safely extract .content if HumanMessage, else keep as-is
+        hotels_msg = hotels_result.get("hotels", "")
+        activities_msg = activities_result.get("activities", "")
+
+        hotels_content = hotels_msg.content if hasattr(hotels_msg, "content") else hotels_msg
+        activities_content = activities_msg.content if hasattr(activities_msg, "content") else activities_msg
 
         # Default proximity message
         proximity_message = "Could not determine hotel/activity proximity."
@@ -220,7 +224,6 @@ class TravelSupervisor:
 
             # Call DistanceService
             proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
-
             proximity_message = proximity_human_msg.content
 
             if "Recommend searching for closer hotels" in proximity_message:
@@ -231,7 +234,7 @@ class TravelSupervisor:
                     end_date=state["trip_details"]["end_date"],
                     budget=state["trip_details"].get("budget")
                 )
-                hotels_content = refined_hotels_msg.content
+                hotels_content = refined_hotels_msg.content if hasattr(refined_hotels_msg, "content") else refined_hotels_msg
                 proximity_message += "\nRefined hotel search applied."
 
         except Exception as e:
@@ -250,38 +253,49 @@ class TravelSupervisor:
 
 
 
+
     async def _create_itinerary(self, state: TravelState) -> Dict[str, Any]:
-        """Create a comprehensive itinerary from all collected data"""
         trip_details = state["trip_details"]
         flights = state["flights"]
         hotels = state["hotels"]
         activities = state["activities"]
 
-        # Use LLM to create a well-formatted itinerary
+        # Updated prompt for a detailed itinerary
         messages = [
             HumanMessage(content=f"""
-            Create a comprehensive travel itinerary based on the following information(give multiple options for the flights, hotels, and activities based on budget, comfort, luxury, economy, number of people ):
+            You are a seasoned travel advisor with expertise in creating detailed, personalized travel itineraries.
 
+            Using the following trip details and collected data, generate a comprehensive itinerary for the trip.
+            
             TRIP DETAILS:
             {trip_details}
-
+            
             FLIGHT OPTIONS:
-            {flights}
-
-            HOTEL OPTIONS:
-            {hotels}
-
-            RECOMMENDED ACTIVITIES:
-            {activities}
-
-            Format the itinerary as a clear, well-organized travel plan with sections for:
-            1. Trip Overview (destination, dates, travelers)
-            2. Flight Information (select the best option)
-            3. Accommodation (select the best option)
-            4. Daily Itinerary with Activities
+            Provide **three flight options**. For each option, include:
+            - The full airline name and flight number.
+            - Departure time, arrival time, and total flight duration.
+            - Price and any layover information (indicate if direct or with stops).
+            
+            ACCOMMODATION:
+            Provide the exact name of the selected hotel, along with its star rating, nightly price, and key amenities.
+            
+            DAILY ITINERARY:
+            For each day of the trip, list specific places the traveler can visit. Include:
+            - The day number and date.
+            - Detailed suggestions of attractions or places to see, focusing on historical sites, cultural experiences, and architectural highlights.
+            - Brief descriptions for each location and why it is significant.
+            
+            BUDGET BREAKDOWN:
+            Provide a detailed breakdown of estimated costs for flights, accommodation, and daily expenses.
+            
+            Format your response as follows:
+            1. Trip Overview (destination, dates, number of travelers, preferences)
+            2. Flight Options (3 options with details)
+            3. Accommodation (exact hotel name and details)
+            4. Detailed Daily Itinerary (day-by-day schedule with specific places)
             5. Budget Breakdown
-
-            Make sure the itinerary is personalized based on the user's preferences.
+            
+            Ensure the itinerary is detailed, practical, and personalized based on the given trip details.
             """)
         ]
 
@@ -289,6 +303,7 @@ class TravelSupervisor:
         itinerary = response.content
 
         return {"itinerary": itinerary}
+
 
     def _supervisor_finish(self, state: TravelState) -> Dict[str, Any]:
         """Final node that completes the workflow"""
