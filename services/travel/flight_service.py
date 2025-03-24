@@ -1,32 +1,21 @@
 # services/travel/flight_service.py
 
 import os
-import json
 import logging
-import re
-from typing import Dict, Any, List, Optional
-from amadeus import Client, ResponseError
-from dotenv import load_dotenv
+from typing import Dict, Any
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-import asyncio
+from playwright.async_api import async_playwright
+from browser_use import Agent, Browser, BrowserConfig
+from services.Prompts.FlightsPrompt import flight_scrape_task
+from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-def parse_duration(duration_str: str) -> int:
-    """
-    Parse an ISO 8601 duration string (e.g., 'PT19H45M') and return total minutes.
-    """
-    hours = re.search(r'(\d+)H', duration_str)
-    minutes = re.search(r'(\d+)M', duration_str)
-    total = 0
-    if hours:
-        total += int(hours.group(1)) * 60
-    if minutes:
-        total += int(minutes.group(1))
-    return total
 
 class FlightService:
     """Service for handling flight-related operations using Amadeus API with integrated prompt engineering for flight selection."""
@@ -35,57 +24,150 @@ class FlightService:
         """
         Initialize the Amadeus client and the LLM client using environment variables.
         """
-        self.amadeus = Client(
-            client_id=os.getenv("AMADEUS_CLIENT_ID"),
-            client_secret=os.getenv("AMADEUS_CLIENT_SECRET"),
-            log_level="debug"
-        )
         self.llm = ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-3.5-turbo", temperature=0)
 
-    def _get_iata_code(self, location: str) -> str:
-        """
-        Resolve a city name to an IATA code using Amadeus API. If the input is already a 3-letter code,
-        it returns the code in uppercase. If no code is found via the API, a fallback mapping is used.
-        """
-        if len(location) == 3 and location.isalpha():
-            return location.upper()
+    async def start(self, use_bright_data=True):
+        self.playwright = await async_playwright().start()
 
-        fallback_mapping = {
-            "NEW YORK CITY": "NYC",
-            "NEW YORK": "NYC",
-            "BANGALORE": "BLR",
-            "BENGALURU": "BLR",
-            "BENAGLURU": "BLR",  # Handling common misspelling
-            "LOS ANGELES": "LAX",
-            "CHICAGO": "CHI",
-            # Extend mapping as needed.
-        }
-        
-        loc_upper = location.upper().strip()
-        refined_keyword = loc_upper.replace(" CITY", "").strip()
+        if use_bright_data:
+            # Bright Data configuration
+            self.browser = await self.playwright.chromium.connect(
+                os.getenv("BRIGHTDATA_WSS_URL")
+            )
+        else:
+            # Local browser configuration
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,  # Set to True for headless mode
+            )
 
+        self.context = await self.browser.new_context()
+        self.page = await self.context.new_page()
+
+    async def fill_and_select_airport(self, input_selector, airport_name):
         try:
-            response = self.amadeus.reference_data.locations.get(keyword=refined_keyword, subType="CITY")
-            data = response.data
-            if data and "iataCode" in data[0]:
-                return data[0]["iataCode"].upper()
+            if input_selector == 'input[aria-label="Where to? "]':
+                input_element = await self.page.wait_for_selector(input_selector)
+                await input_element.type(airport_name, delay=200)
+                await self.page.wait_for_selector(
+                    f'li[role="option"][aria-label*="{airport_name}"]', timeout=8000
+                )
+                await self.page.wait_for_timeout(500)
             else:
-                logger.warning(f"No IATA code found for location: {location} using refined keyword '{refined_keyword}'.")
-                if loc_upper in fallback_mapping:
-                    return fallback_mapping[loc_upper]
-                return loc_upper
-        except ResponseError as error:
-            logger.error(f"Error fetching IATA code for {location}: {error}")
-            if loc_upper in fallback_mapping:
-                return fallback_mapping[loc_upper]
-            return loc_upper
+                input_element = await self.page.wait_for_selector(input_selector)
+                await self.page.evaluate('(el) => el.value = ""', input_element)
+                await input_element.type(airport_name, delay=200)
+                await self.page.wait_for_selector(
+                    f'li[role="option"][aria-label*="{airport_name}"]', timeout=8000
+                )
+                await self.page.wait_for_timeout(500)
 
+            # Try different selectors for the dropdown item
+            dropdown_selectors = [
+                f'li[role="option"][aria-label*="{airport_name}"]',
+                f'li[role="option"] .zsRT0d:text-is("{airport_name}")',
+                f'.zsRT0d:has-text("{airport_name}")',
+            ]
+
+            for selector in dropdown_selectors:
+                try:
+                    dropdown_item = await self.page.wait_for_selector(
+                        selector, timeout=8000
+                    )
+                    if dropdown_item:
+                        await dropdown_item.click()
+                        await self.page.wait_for_load_state("networkidle")
+                        return True
+                except:
+                    continue
+
+            raise Exception(f"Could not select airport: {airport_name}")
+
+        except Exception as e:
+            print(f"Error filling airport: {str(e)}")
+            await self.page.screenshot(path=f"error_{airport_name.lower()}.png")
+            return False
+
+    async def fill_flight_search(self, origin, destination, start_date, travelers):
+        try:
+            print("Navigating to Google Flights...")
+            await self.page.goto("https://www.google.com/travel/flights")
+
+            print("Filling in destination...")
+            if not await self.fill_and_select_airport(
+                    'input[aria-label="Where to? "]', destination
+            ):
+                raise Exception("Failed to set destination airport")
+
+            print("Filling in origin...")
+            if not await self.fill_and_select_airport(
+                    'input[aria-label="Where from?"]', origin
+            ):
+                raise Exception("Failed to set origin airport")
+
+            print("Setting number of travelers...")
+
+            # Click the travelers button
+            for i in range(int(travelers)):
+                try:
+                    await self.page.wait_for_selector('[aria-label="1 passenger"]', timeout=8000)
+                    await self.page.click('[aria-label="1 passenger"]')
+                    await self.page.wait_for_timeout(1000)
+                    await self.page.wait_for_selector('[aria-label="Add adult"]', timeout=8000)
+                    await self.page.click('[aria-label="Add adult"]')
+                    await self.page.wait_for_timeout(1000)
+                    done_button = await self.page.wait_for_selector(
+                        'button[class="VfPpkd-LgbsSe ksBjEc lKxP2d LQeN7 bRx3h sIWnMc"]', timeout=5000
+                    )
+                    await done_button.click()
+                except:
+                    continue
+
+            # Change the travelling type to "One Way"
+            await self.page.click('div[role="combobox"][aria-haspopup="listbox"]')
+            await self.page.wait_for_timeout(1000)
+            await self.page.click('li[data-value="2"]')
+            await self.page.wait_for_timeout(1000)
+
+            print("Selecting dates...")
+            # Click the departure date button
+            await self.page.click('input[aria-label*="Departure"]')
+            await self.page.wait_for_timeout(1000)
+
+            # Select departure date
+            departure_button = await self.page.wait_for_selector(
+                f'div[aria-label*="{start_date}"]', timeout=8000
+            )
+            await departure_button.click()
+            await self.page.wait_for_timeout(1000)
+
+            # Click Done button if it exists
+            try:
+                done_button = await self.page.wait_for_selector(
+                    'button[aria-label*="Done."]', timeout=5000
+                )
+                await done_button.click()
+            except:
+                print("No Done button found, continuing...")
+
+            return self.page.url
+
+        except Exception as e:
+            print(f"An error occurred: {str(e)}")
+            return None
+
+    async def close(self):
+        try:
+            await self.context.close()
+            await self.browser.close()
+            await self.playwright.stop()
+        except Exception as e:
+            print(f"Error during cleanup: {str(e)}")
 
     async def get_best_flight(self, extracted_details: Dict[str, Any]) -> str:
         """
-        Use extracted trip details to query the Amadeus API for flight offers,
-        compute key metrics (cheapest, lowest layovers, shortest duration, best options per cabin if available)
-        and then use prompt engineering to generate a detailed plain language flight summary message.
+        Query the Google Flight website real time for flight offers using the extracted trip details,
+        compute key metrics (cheapest, fewest layovers, shortest duration, best options per cabin if available),
+        and use prompt engineering to generate a detailed plain language flight summary message.
         
         Args:
             extracted_details: A dictionary containing keys such as 'origin', 'destination', 'start_date', 'travelers'.
@@ -96,107 +178,90 @@ class FlightService:
         origin = extracted_details.get("origin", "")
         destination = extracted_details.get("destination", "")
         start_date = extracted_details.get("start_date", "")
+        end_date = extracted_details.get("end_date", "")
         travelers = extracted_details.get("travelers", 1)
-        
-        origin_code = self._get_iata_code(origin)
-        destination_code = self._get_iata_code(destination)
-        
-        query_payload = {
-            "originLocationCode": origin_code,
-            "destinationLocationCode": destination_code,
-            "departureDate": start_date,
-            "adults": travelers,
-            "currencyCode": "USD",
-            "max": 5,
-        }
-        
-        logger.info(f"Querying flights with payload: {query_payload}")
-        
+
+        # Get the flight search URL
         try:
-            response = self.amadeus.shopping.flight_offers_search.get(**query_payload)
-            flight_offers = response.data
-            # Capture additional dictionary info if available.
-            dictionaries = response.result.get("dictionaries", {}) if hasattr(response, "result") and isinstance(response.result, dict) else {}
-            if not flight_offers:
-                return f"No flights found for {origin_code} → {destination_code} on {start_date}."
-        except ResponseError as error:
-            logger.error(f"Amadeus Flight API error: {error}")
-            return f"Error fetching flights from Amadeus: {error}"
-        
-        processed_offers: List[Dict[str, Any]] = []
-        for idx, offer in enumerate(flight_offers, start=1):
-            try:
-                price = float(offer["price"]["grandTotal"])
-            except Exception:
-                price = float(offer["price"]["total"])
-            currency = offer["price"]["currency"]
-            
-            itinerary = offer.get("itineraries", [])[0]
-            duration_str = itinerary.get("duration", "PT0M")
-            total_duration = parse_duration(duration_str)
-            segments = itinerary.get("segments", [])
-            layovers = len(segments) - 1 if segments else 0
-            
-            cabin_class = "N/A"
-            if "travelerPricings" in offer and offer["travelerPricings"]:
-                cabin_class = offer["travelerPricings"][0].get("cabin", "N/A")
-            
-            segment_details = []
-            for seg in segments:
-                carrier_code = seg.get("carrierCode", "N/A")
-                # Lookup carrier full name from dictionaries if available.
-                carrier_full = carrier_code
-                if dictionaries and "carriers" in dictionaries:
-                    carrier_full = dictionaries["carriers"].get(carrier_code, carrier_code)
-                # Format as: FullName (Code)
-                carrier_display = f"{carrier_full} ({carrier_code})"
-                
-                segment_details.append({
-                    "carrier": carrier_display,
-                    "flight_number": seg.get("flightNumber", "N/A"),
-                    "departure_iata": seg["departure"].get("iataCode", "N/A"),
-                    "departure_time": seg["departure"].get("at", "N/A"),
-                    "arrival_iata": seg["arrival"].get("iataCode", "N/A"),
-                    "arrival_time": seg["arrival"].get("at", "N/A"),
-                    "aircraft": seg.get("aircraft", {}).get("code", "N/A")
-                })
-            
-            processed_offers.append({
-                "price": price,
-                "currency": currency,
-                "total_duration_minutes": total_duration,
-                "layovers": layovers,
-                "cabin": cabin_class,
-                "segments": segment_details
-            })
-        
-        raw_offers_json = json.dumps(processed_offers, indent=2)
-        logger.info(f"Processed flight offers JSON: {raw_offers_json}")
-        
+            scraper = FlightService()
+            await scraper.start(use_bright_data=False)
+            departing_flight_url = await scraper.fill_flight_search(
+                origin=origin,
+                destination=destination,
+                start_date=start_date,
+                travelers=travelers
+            )
+
+            returning_flight_url = await scraper.fill_flight_search(origin=destination,
+                                                                    destination=origin,
+                                                                    start_date=end_date,
+                                                                    travelers=travelers
+                                                                    )
+        finally:
+            print("Closing connection...")
+            if "scraper" in locals():
+                await scraper.close()
+
+        if not departing_flight_url and not returning_flight_url:
+            logger.error("Failed to retrieve flight search URL.")
+            return "Unable to find flight offers at this time."
+
+        departing_flight_result = await self.scrape_flights(departing_flight_url)
+        returning_flight_result = await self.scrape_flights(returning_flight_url)
+
+        logger.info(f"Processed flight offers JSON: {departing_flight_result, returning_flight_result}")
+
         prompt = (
-            "You are a seasoned travel advisor with expertise in flight planning. "
-            "Given the following JSON data of flight offers, generate a detailed, plain language summary message "
-            "that provides the exact details for each flight offer. For each flight, include:\n"
-            "- Price (with currency)\n"
-            "- Total flight duration (in minutes)\n"
-            "- Number of layovers\n"
-            "- Cabin class\n"
-            "- For each flight segment, include the carrier (as the full name with the code in parentheses), "
-            "flight number, aircraft model (if available), departure and arrival airport codes, and departure and arrival times.\n"
-            "Also mention any alternative or nearby airport options if available from the dictionaries data.\n\n"
-            "Here is the flight offers JSON data:\n\n"
-            f"{raw_offers_json}\n\n"
-            "Return your answer as a clear plain text message without referring to options by number."
+            "You are a seasoned flight advisor with expertise in flight planning, advising, and booking"
+            "Given the following JSON data of Departing and Returning flight offers, Generate a detailed plain text summary, Give adivce on the best options to choose from while listing all the options available.\n"
+            "In the JSON, Each and every flight, include:\n"
+            " - Departure date & time (local)" 
+            " - Arrival date & time (local)"
+            " - Origin & destination airports (Airport full names, ex: 'Los Angeles International Airport') "
+            " - Full flight duration (in 'Xh Ym' format)"  
+            " - Number of stops (integer)" 
+            " - Layover airports & layover durations"
+            " - Airline(s) (e.g. “Frontier”)"
+            " - Individual leg prices (numeric only) if given separately"
+            " - For each flight segment, include the carrier (as the full name with the code in parentheses)"
+            "Here is the Departing flight JSON data:\n\n"
+            f"{departing_flight_url}\n\n"
+            "Here is the Returning flight JSON data:\n\n"
+            f"{returning_flight_url}\n\n"
+            "Return your answer as a clear plain text message."
         )
-        
+
         messages = [HumanMessage(content=prompt)]
         response_llm = await self.llm.ainvoke(messages)
         human_message = response_llm.content.strip()
         logger.info(f"LLM generated human message: {human_message}")
-        
+
         return human_message
 
-    async def get_flights(self, *, origin: str, destination: str, start_date: str, travelers: int) -> str:
+    async def scrape_flights(self, url):
+        browser = Browser(
+            config=BrowserConfig(
+                headless=False
+            )
+        )
+        initial_actions = [
+            {"open_tab": {"url": url}},
+        ]
+
+        agent = Agent(
+            task=flight_scrape_task(url, "I want flights with price under 1000 USD"),
+            llm=ChatOpenAI(model="gpt-4o-mini"),
+            initial_actions=initial_actions,
+            browser=browser,
+        )
+
+        history = await agent.run()
+        await browser.close()
+        result = history.final_result()
+        return result
+
+    async def get_flights(self, origin: str, destination: str, start_date: str, end_date: str,
+                          travelers: int) -> str:
         """
         A wrapper method to allow the supervisor to call get_flights with keyword arguments.
         It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
@@ -205,6 +270,7 @@ class FlightService:
             "origin": origin,
             "destination": destination,
             "start_date": start_date,
+            "end_date": end_date,
             "travelers": travelers
         }
         return await self.get_best_flight(extracted_details)

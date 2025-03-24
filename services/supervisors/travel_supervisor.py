@@ -103,6 +103,7 @@ class TravelSupervisor:
         origin = trip_details.get("origin")
         destination = trip_details.get("destination")
         start_date = trip_details.get("start_date")
+        end_date = trip_details.get("end_date")
         travelers = trip_details.get("travelers")
 
         try:
@@ -111,10 +112,9 @@ class TravelSupervisor:
     origin=origin,
     destination=destination,
     start_date=start_date,
+    end_date=end_date,
     travelers=travelers
 )
-
-
 
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -139,27 +139,13 @@ class TravelSupervisor:
         budget = trip_details.get("budget")
 
         try:
-            # Calculate per night budget if total budget is provided
-            per_night_budget = None
-            if budget:
-                # Calculate number of nights
-                try:
-                    start = datetime.strptime(start_date, "%Y-%m-%d")
-                    end = datetime.strptime(end_date, "%Y-%m-%d")
-                    num_nights = (end - start).days
-                    if num_nights > 0 and budget > 0:
-                        # Allocate 40% of total budget to accommodation
-                        accommodation_budget = budget * 0.4
-                        per_night_budget = int(accommodation_budget / num_nights)
-                except Exception as e:
-                    logger.error(f"Error calculating per night budget: {e}")
-
             # Call hotel service
             hotels = self.hotel_service.get_hotels(
                 destination=destination,
                 start_date=start_date,
                 end_date=end_date,
-                budget=per_night_budget
+                budget=budget,
+                travelers=trip_details.get("travelers", 1)
             )
 
             end_time = datetime.now()
@@ -212,38 +198,38 @@ class TravelSupervisor:
         activities_content = activities_result.get("activities", "")
 
         # Default proximity message
-        proximity_message = "Could not determine hotel/activity proximity."
-
-        try:
-            hotels_list = hotels_content.split("|")
-            activities_list = activities_content.split("|")
-
-            # Call DistanceService
-            proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
-
-            proximity_message = proximity_human_msg.content
-
-            if "Recommend searching for closer hotels" in proximity_message:
-                # Refine hotels
-                refined_hotels_msg = self.hotel_service.get_hotels(
-                    destination=f"{state['trip_details']['destination']} city center",
-                    start_date=state["trip_details"]["start_date"],
-                    end_date=state["trip_details"]["end_date"],
-                    budget=state["trip_details"].get("budget")
-                )
-                hotels_content = refined_hotels_msg.content
-                proximity_message += "\nRefined hotel search applied."
-
-        except Exception as e:
-            self.logger.error(f"Proximity check failed: {e}")
-            proximity_message = f"Proximity check error: {e}"
+        # proximity_message = "Could not determine hotel/activity proximity."
+        #
+        # try:
+        #     hotels_list = hotels_content.split("|")
+        #     activities_list = activities_content.split("|")
+        #
+        #     # Call DistanceService
+        #     proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
+        #
+        #     proximity_message = proximity_human_msg.content
+        #
+        #     if "Recommend searching for closer hotels" in proximity_message:
+        #         # Refine hotels
+        #         refined_hotels_msg = self.hotel_service.get_hotels(
+        #             destination=f"{state['trip_details']['destination']} city center",
+        #             start_date=state["trip_details"]["start_date"],
+        #             end_date=state["trip_details"]["end_date"],
+        #             budget=state["trip_details"].get("budget")
+        #         )
+        #         hotels_content = refined_hotels_msg.content
+        #         proximity_message += "\nRefined hotel search applied."
+        #
+        # except Exception as e:
+        #     self.logger.error(f"Proximity check failed: {e}")
+        #     proximity_message = f"Proximity check error: {e}"
 
         # Update state
         state.update({
             "flights": flights_result.get("flights", []),
             "hotels": hotels_content,
-            "activities": activities_content,
-            "proximity_check": proximity_message
+            "activities": activities_content
+            #"proximity_check": proximity_message
         })
 
         return state
@@ -276,8 +262,8 @@ class TravelSupervisor:
 
             Format the itinerary as a clear, well-organized travel plan with sections for:
             1. Trip Overview (destination, dates, travelers)
-            2. Flight Information (select the best option)
-            3. Accommodation (select the best option)
+            2. Flight Information (Give all the flight information)
+            3. Accommodation (Give all the hotel options provided)
             4. Daily Itinerary with Activities
             5. Budget Breakdown
 
