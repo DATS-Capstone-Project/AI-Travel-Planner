@@ -88,7 +88,7 @@ def chat_with_bot(session_id, message):
         response = requests.post(
             f"{API_URL}/chat",
             json={"session_id": session_id, "message": message},
-            timeout=30
+            timeout=300
         )
         response.raise_for_status()
         return response.json()

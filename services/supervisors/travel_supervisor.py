@@ -133,6 +133,7 @@ class TravelSupervisor:
         start_date = trip_details.get("start_date")
         end_date = trip_details.get("end_date")
         budget = trip_details.get("budget")
+        adults = trip_details.get("travelers")
 
         try:
             # Calculate per night budget if total budget is provided
@@ -151,11 +152,11 @@ class TravelSupervisor:
                     logger.error(f"Error calculating per night budget: {e}")
 
             # Call hotel service
-            hotels = self.hotel_service.get_hotels(
+            hotels = await self.hotel_service.get_hotel_url(
                 destination=destination,
-                start_date=start_date,
-                end_date=end_date,
-                budget=per_night_budget
+                checkin_date=start_date,
+                checkout_date=end_date,
+                adults=adults
             )
 
             end_time = datetime.now()
