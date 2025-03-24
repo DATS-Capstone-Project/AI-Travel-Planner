@@ -10,6 +10,7 @@ from browser_use import Agent, Browser, BrowserConfig
 from services.Prompts.FlightsPrompt import flight_scrape_task
 from dotenv import load_dotenv
 import os
+from datetime import datetime
 
 load_dotenv()
 
@@ -265,11 +266,18 @@ class FlightService:
         A wrapper method to allow the supervisor to call get_flights with keyword arguments.
         It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
         """
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+        # Format to desired output
+        formatted_start_date = start_date_obj.strftime("%B %d, %Y")
+        formatted_end_date = end_date_obj.strftime("%B %d, %Y")
+
         extracted_details = {
             "origin": origin,
             "destination": destination,
-            "start_date": start_date,
-            "end_date": end_date,
+            "start_date": formatted_start_date,
+            "end_date": formatted_end_date,
             "travelers": travelers
         }
         return await self.get_best_flight(extracted_details)

@@ -7,6 +7,7 @@ import dateparser
 import os
 import json
 from typing import Dict, Any
+from datetime import datetime
 
 load_dotenv()
 
@@ -430,7 +431,14 @@ class HotelService:
         end_date = extracted_details.get("end_date", "")
         adults = extracted_details.get("travelers", "1")
 
-        url = await self.get_hotel_url(self, destination, start_date, end_date, adults)
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+
+        # Format to desired output
+        formatted_start_date = start_date_obj.strftime("%B %d, %Y")
+        formatted_end_date = end_date_obj.strftime("%B %d, %Y")
+
+        url = await self.get_hotel_url(self, destination, formatted_start_date, formatted_end_date, adults)
         hotel_data = await self.scrape_hotels(url)
 
         if hotel_data:

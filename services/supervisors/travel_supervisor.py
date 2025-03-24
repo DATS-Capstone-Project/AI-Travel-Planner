@@ -13,7 +13,7 @@ from services.travel.activity_service import ActivityService
 from repositories.session_repository import SessionRepository
 from models.trip_details import TripDetails
 from config.settings import OPENAI_API_KEY, ASSISTANT_NAME, CONVERSATION_MODEL
-from services.travel.distance_service import DistanceService
+#from services.travel.distance_service import DistanceService
 
 
 
@@ -55,7 +55,7 @@ class TravelSupervisor:
         self.hotel_service = hotel_service
         self.activity_service = activity_service
         self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model=model_name, temperature=0)
-        self.distance_service = DistanceService()
+        #self.distance_service = DistanceService()
         self.logger = logging.getLogger(__name__)
 
         # Build the workflow graph
