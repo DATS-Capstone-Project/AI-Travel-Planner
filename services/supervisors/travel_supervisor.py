@@ -13,7 +13,6 @@ from services.travel.activity_service import ActivityService
 from repositories.session_repository import SessionRepository
 from models.trip_details import TripDetails
 from config.settings import OPENAI_API_KEY, ASSISTANT_NAME, CONVERSATION_MODEL
-#from services.travel.distance_service import DistanceService
 
 
 
@@ -54,7 +53,7 @@ class TravelSupervisor:
         self.flight_service = flight_service
         self.hotel_service = hotel_service
         self.activity_service = activity_service
-        self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model=model_name, temperature=0)
+        self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0)
         #self.distance_service = DistanceService()
         self.logger = logging.getLogger(__name__)
 
@@ -140,11 +139,10 @@ class TravelSupervisor:
 
         try:
             # Call hotel service
-            hotels = self.hotel_service.get_hotels(
+            hotels = await self.hotel_service.get_hotels(
                 destination=destination,
                 start_date=start_date,
                 end_date=end_date,
-                budget=budget,
                 travelers=trip_details.get("travelers", 1)
             )
 
@@ -243,32 +241,68 @@ class TravelSupervisor:
         hotels = state["hotels"]
         activities = state["activities"]
 
+        print("Trip details:", trip_details)
+        print("Flights:", flights)
+        print("Hotels:", hotels)
+        print("Activities:", activities)
+
         # Use LLM to create a well-formatted itinerary
         messages = [
             HumanMessage(content=f"""
-            Create a comprehensive travel itinerary based on the following information(give multiple options for the flights, hotels, and activities based on budget, comfort, luxury, economy, number of people ):
+                You are an experienced travel consultant creating a personalized travel plan. Write in a friendly, conversational tone as if you're directly advising the traveler.
 
-            TRIP DETAILS:
-            {trip_details}
+                Based on the following information, create a detailed travel plan:
 
-            FLIGHT OPTIONS:
-            {flights}
+                TRIP DETAILS:
+                {trip_details}
 
-            HOTEL OPTIONS:
-            {hotels}
+                FLIGHT OPTIONS:
+                {flights}
 
-            RECOMMENDED ACTIVITIES:
-            {activities}
+                HOTEL OPTIONS:
+                {hotels}
 
-            Format the itinerary as a clear, well-organized travel plan with sections for:
-            1. Trip Overview (destination, dates, travelers)
-            2. Flight Information (Give all the flight information)
-            3. Accommodation (Give all the hotel options provided)
-            4. Daily Itinerary with Activities
-            5. Budget Breakdown
+                RECOMMENDED ACTIVITIES:
+                {activities}
 
-            Make sure the itinerary is personalized based on the user's preferences.
-            """)
+                IMPORTANT INSTRUCTIONS:
+
+                1. Begin with a warm, personalized greeting acknowledging their specific trip
+
+                2. For the Flight Options section:
+                   - MAINTAIN THE EXACT FLIGHT INFORMATION FORMAT from the input
+                   - Keep all flight details intact (airline, departure/arrival times, duration, price, stops)
+                   - DO NOT summarize or modify the flight information
+                   - DO NOT use labels like "Flight A", "Flight B", etc.
+                   - Preserve the grouping by time of day (Morning/Afternoon/Evening)
+                   - When recommending flights, refer to them by their actual details (e.g., "the IndiGo flight at 11:25 AM")
+
+                3. For the Hotel Options section:
+                   - MAINTAIN THE EXACT HOTEL INFORMATION FORMAT from the input
+                   - Keep all hotel details intact (name, rating, price, location, amenities)
+                   - DO NOT summarize or modify the hotel information
+                   - DO NOT use generic labels like "Hotel A", "Hotel B", etc.
+                   - Organize hotels logically by price category (Budget-Friendly, Mid-Range, Luxury)
+                   - When recommending hotels, refer to them by their actual names and details (e.g., "the Hyatt Centric at $111 with beach access")
+                   - If hotel details provided are NULL or INSUFFICIENT, present options with your best knowledge, including FULL DETAILS for hotel name, price range, location, amenities, and target travelers
+
+                4. For the Activities section:
+                   - Present recommended activities with full details as provided
+                   - Organize logically by day or category
+                   - Make specific suggestions that complement the selected hotels and overall trip experience
+                   - For each activity, include approximate time requirements and any practical tips
+
+                5. Include a Budget Breakdown section showing estimated total costs for:
+                   - Flights
+                   - Accommodation
+                   - Activities
+                   - Meals and incidentals
+                   - Transportation
+
+                6. End with a friendly closing that offers continued assistance
+
+                ESSENTIAL: Both the flight and hotel sections MUST maintain the identical format as provided in the input, with all details preserved exactly as given.
+                """)
         ]
 
         response = await self.model.ainvoke(messages)

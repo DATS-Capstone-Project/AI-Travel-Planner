@@ -16,6 +16,46 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+FLIGHT_ADVISOR_PROMPT = """
+You are an experienced travel advisor specializing in flight recommendations. You have a friendly, conversational style and genuinely want to help travelers find the best options for their journey.
+
+### Your Response Format:
+You MUST follow this EXACT format for your response:
+
+1. Begin with a warm greeting acknowledging the traveler's trip
+2. Organize flights by direction (outbound/return) and time of day (morning/afternoon/evening)
+3. For EACH flight, include these EXACT details in this format:
+   ```
+   **[Airline Name]**
+   - **Departure:** [Time]
+   - **Arrival:** [Time]
+   - **Duration:** [Duration in hr min format]
+   - **Price:** [Price with currency symbol]
+   - **Stops:** [Nonstop or number of stops]
+   ```
+4. End with specific recommendations that reference the exact flight details (not generic labels)
+
+### CRITICAL INSTRUCTIONS:
+- You MUST ONLY use the EXACT flight data provided in the input
+- DO NOT invent or make up ANY flight information
+- DO NOT change airline names, times, prices, or any other details
+- If you see "IndiGo" in the data, use "IndiGo", NOT "Delta" or any other airline
+- Use PRECISELY the airlines, times, prices and details from the provided flight data
+- NEVER use labels like "Flight A", "Flight B", etc.
+- Group flights by time of day (Morning/Afternoon/Evening) based on departure times
+- Reference specific flights by their actual airline and departure time in recommendations
+
+### Flight Data:
+#### Outbound Flights:
+{departing_flights}
+
+#### Return Flights:
+{returning_flights}
+
+{context}
+
+Remember to treat this as a real conversation where you're genuinely trying to help someone make the best choice for their travel needs, using ONLY the ACTUAL flight data provided above.
+"""
 
 class FlightService:
     """Service for handling flight-related operations using Amadeus API with integrated prompt engineering for flight selection."""
@@ -26,19 +66,13 @@ class FlightService:
         """
         self.llm = ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-3.5-turbo", temperature=0)
 
-    async def start(self, use_bright_data=True):
+    async def start(self):
         self.playwright = await async_playwright().start()
 
-        if use_bright_data:
-            # Bright Data configuration
-            self.browser = await self.playwright.chromium.connect(
-                os.getenv("BRIGHTDATA_WSS_URL")
-            )
-        else:
-            # Local browser configuration
-            self.browser = await self.playwright.chromium.launch(
-                headless=True,  # Set to True for headless mode
-            )
+        # Local browser configuration
+        self.browser = await self.playwright.chromium.launch(
+            headless=False,  # Set to True for headless mode
+        )
 
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
@@ -135,7 +169,7 @@ class FlightService:
 
             # Select departure date
             departure_button = await self.page.wait_for_selector(
-                f'div[aria-label*="{start_date}"]', timeout=8000
+                f'div[aria-label*="{start_date}"]', timeout=12000
             )
             await departure_button.click()
             await self.page.wait_for_timeout(1000)
@@ -163,6 +197,23 @@ class FlightService:
         except Exception as e:
             print(f"Error during cleanup: {str(e)}")
 
+    async def get_flight_url(self, origin, destination, start_date, travelers):
+        try:
+            scraper = FlightService()
+            await scraper.start()
+            url = await scraper.fill_flight_search(
+                origin=origin,
+                destination=destination,
+                start_date=start_date,
+                travelers=travelers,
+            )
+            return url
+        finally:
+            print("Closing connection...")
+            if "scraper" in locals():
+                await scraper.close()
+        return None
+
     async def get_best_flight(self, extracted_details: Dict[str, Any]) -> str:
         """
         Query the Google Flight website real time for flight offers using the extracted trip details,
@@ -182,25 +233,8 @@ class FlightService:
         travelers = extracted_details.get("travelers", 1)
 
         # Get the flight search URL
-        try:
-            scraper = FlightService()
-            await scraper.start(use_bright_data=False)
-            departing_flight_url = await scraper.fill_flight_search(
-                origin=origin,
-                destination=destination,
-                start_date=start_date,
-                travelers=travelers
-            )
-
-            returning_flight_url = await scraper.fill_flight_search(origin=destination,
-                                                                    destination=origin,
-                                                                    start_date=end_date,
-                                                                    travelers=travelers
-                                                                    )
-        finally:
-            print("Closing connection...")
-            if "scraper" in locals():
-                await scraper.close()
+        departing_flight_url = await self.get_flight_url(origin, destination, start_date, travelers)
+        returning_flight_url = await self.get_flight_url(destination, origin, end_date, travelers)
 
         if not departing_flight_url and not returning_flight_url:
             logger.error("Failed to retrieve flight search URL.")
@@ -211,32 +245,27 @@ class FlightService:
 
         logger.info(f"Processed flight offers JSON: {departing_flight_result, returning_flight_result}")
 
-        prompt = (
-            "You are a seasoned flight advisor with expertise in flight planning, advising, and booking"
-            "Given the following JSON data of Departing and Returning flight offers, Generate a detailed plain text summary, Give adivce on the best options to choose from while listing all the options available.\n"
-            "In the JSON, Each and every flight, include:\n"
-            " - Departure date & time (local)" 
-            " - Arrival date & time (local)"
-            " - Origin & destination airports (Airport full names, ex: 'Los Angeles International Airport') "
-            " - Full flight duration (in 'Xh Ym' format)"  
-            " - Number of stops (integer)" 
-            " - Layover airports & layover durations"
-            " - Airline(s) (e.g. “Frontier”)"
-            " - Individual leg prices (numeric only) if given separately"
-            " - For each flight segment, include the carrier (as the full name with the code in parentheses)"
-            "Here is the Departing flight JSON data:\n\n"
-            f"{departing_flight_url}\n\n"
-            "Here is the Returning flight JSON data:\n\n"
-            f"{returning_flight_url}\n\n"
-            "Return your answer as a clear plain text message."
+        flight_res = await self.get_flight_advisor_response(departing_flight_url, returning_flight_url)
+
+        return flight_res
+
+    async def get_flight_advisor_response(self,departing_flights, returning_flights, context=None):
+        """Get flight advisor response based on scraped flight data."""
+        context_str = f"\n### Additional Context:\n{context}" if context else ""
+
+        prompt = FLIGHT_ADVISOR_PROMPT.format(
+            departing_flights=departing_flights,
+            returning_flights=returning_flights,
+            context=context_str
         )
-
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
         messages = [HumanMessage(content=prompt)]
-        response_llm = await self.llm.ainvoke(messages)
-        human_message = response_llm.content.strip()
-        logger.info(f"LLM generated human message: {human_message}")
+        print("Generating flight advisor response...")
+        response_llm = await llm.ainvoke(messages)
+        advisor_response = response_llm.content.strip()
 
-        return human_message
+        print("Flight advisor response generated")
+        return advisor_response
 
     async def scrape_flights(self, url):
         browser = Browser(
@@ -249,7 +278,7 @@ class FlightService:
         ]
 
         agent = Agent(
-            task=flight_scrape_task(url, "I want flights with price under 1000 USD"),
+            task=flight_scrape_task(url),
             llm=ChatOpenAI(model="gpt-4o-mini"),
             initial_actions=initial_actions,
             browser=browser,
@@ -266,18 +295,16 @@ class FlightService:
         A wrapper method to allow the supervisor to call get_flights with keyword arguments.
         It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
         """
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
-
-        # Format to desired output
-        formatted_start_date = start_date_obj.strftime("%B %d, %Y")
-        formatted_end_date = end_date_obj.strftime("%B %d, %Y")
 
         extracted_details = {
             "origin": origin,
             "destination": destination,
-            "start_date": formatted_start_date,
-            "end_date": formatted_end_date,
+            "start_date": self.format_date(start_date),
+            "end_date": self.format_date(end_date),
             "travelers": travelers
         }
         return await self.get_best_flight(extracted_details)
+
+    def format_date(self, date_str):
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        return f"{date_obj.strftime('%B')} {date_obj.day}, {date_obj.year}"

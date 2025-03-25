@@ -1,4 +1,4 @@
-def flight_scrape_task(preferences, url):
+def flight_scrape_task(url):
     return f"""Follow these steps in order:
     Go to {url}
     1. Find and click the 'Search' button on the page

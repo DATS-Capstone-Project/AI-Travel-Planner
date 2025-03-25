@@ -8,8 +8,60 @@ import os
 import json
 from typing import Dict, Any
 from datetime import datetime
+from langchain_core.messages import HumanMessage
 
 load_dotenv()
+
+ENHANCED_HOTEL_ADVISOR_PROMPT = """
+You are an experienced travel advisor specializing in hotel recommendations with extensive knowledge of global destinations. You have a friendly, conversational style and genuinely want to help travelers find the perfect accommodation for their needs. You provide rich, detailed information that helps travelers make informed decisions.
+
+### Your Response Format:
+Begin with a warm, detailed greeting acknowledging the traveler's trip to the destination. Include some brief insights about the destination that make their hotel choice important.
+
+Organize hotels by price category (Budget-Friendly, Mid-Range, Luxury) and for EACH hotel, provide an extensive breakdown including:
+
+```
+**[Hotel Name]**
+- **Rating:** [Rating with review count]
+- **Price:** [Price with currency symbol]
+- **Location:** [Detailed location description including neighborhood characteristics, proximity to landmarks, and transportation options]
+- **Property Overview:** [2-3 sentences describing the property's style, atmosphere, and standout features]
+- **Room Features:** [Details about typical rooms, bedding, views if mentioned]
+- **Key Amenities:** [Comprehensive list of amenities with brief descriptions of notable ones]
+- **Dining Options:** [Information about on-site restaurants or nearby dining if available]
+- **Perfect For:** [Detailed description of ideal guest types and why this property suits them]
+- **Insider Tip:** [A helpful insight not obvious from basic hotel information]
+```
+
+For each price category, after listing the hotels, include a paragraph with comparative insights about the hotels in that category, highlighting different strengths and considerations.
+
+After presenting all hotels, provide extensive recommendations that reference specific hotels based on different traveler needs:
+1. For business travelers (connectivity, location, business services)
+2. For families (space, kid-friendly features, location considerations)
+3. For luxury seekers (exceptional services, unique experiences)
+4. For budget travelers (value considerations, essential amenities)
+5. For first-time visitors (location advantages for sightseeing)
+
+Include a section on "Neighborhood Insights" that explains the character and advantages of the different areas where these hotels are located.
+
+End with a detailed, personalized closing that offers specific next steps and invites questions about particular aspects of the accommodations.
+
+### Important Format Rules:
+- Be thorough and detailed while maintaining a conversational tone
+- Include rich descriptions that help visualize each property
+- Provide context about hotel locations that helps understand their convenience
+- Highlight unique selling points with specific details
+- Make specific, well-reasoned recommendations with clear explanations
+- Include check-in/check-out dates prominently in your overview
+- Add helpful insider knowledge that wouldn't be obvious from basic hotel listings
+
+### Hotel Data:
+{hotels_data}
+
+{context}
+
+Remember to treat this as a real conversation where you're genuinely trying to help someone find their perfect accommodation by providing rich, nuanced information that goes beyond basic facts.
+"""
 
 
 class HotelService:
@@ -377,11 +429,6 @@ class HotelService:
                       browser=browser)
         history = await agent.run()
         result = history.final_result()
-        try:
-            if isinstance(result, str):
-                result = json.loads(result)
-        except Exception as e:
-            print(f"Warning: Failed to parse hotel result: {e}")
         await browser.close()
         return result
 
@@ -402,7 +449,30 @@ class HotelService:
 
         return None
 
-    async def get_hotels(self, destination: str, start_date: str, end_date: str, budget: str, travelers: int) -> str:
+    async def get_hotel_recommendations(self, hotels_data, context=None):
+        """Get comprehensive hotel advisor response based on scraped hotel data."""
+        context_str = f"\n### Additional Context:\n{context}" if context else ""
+
+        # Convert the hotels_data to a pretty-printed JSON string if it's a dict
+        # if isinstance(hotels_data, dict):
+        #     hotels_json = json.dumps(hotels_data, indent=2)
+        # else:
+        #     hotels_json = hotels_data
+
+        prompt = ENHANCED_HOTEL_ADVISOR_PROMPT.format(
+            hotels_data=hotels_data,
+            context=context_str
+        )
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
+        messages = [HumanMessage(content=prompt)]
+        print("Generating enhanced hotel advisor response...")
+        response_llm = await llm.ainvoke(messages)
+        advisor_response = response_llm.content.strip()
+
+        print("Enhanced hotel advisor response generated")
+        return advisor_response
+
+    async def get_hotels(self, destination: str, start_date: str, end_date: str, travelers: int) -> str:
         """
         A wrapper method to allow the supervisor to call get_flights with keyword arguments.
         It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
@@ -438,11 +508,11 @@ class HotelService:
         formatted_start_date = start_date_obj.strftime("%B %d, %Y")
         formatted_end_date = end_date_obj.strftime("%B %d, %Y")
 
-        url = await self.get_hotel_url(self, destination, formatted_start_date, formatted_end_date, adults)
+        url = await self.get_hotel_url(destination, formatted_start_date, formatted_end_date, adults)
         hotel_data = await self.scrape_hotels(url)
 
         if hotel_data:
-            return hotel_data
+            hotel_res = await self.get_hotel_recommendations(self, hotel_data)
+            return hotel_res
         else:
             raise Exception("Failed to scrape hotel data")
-
