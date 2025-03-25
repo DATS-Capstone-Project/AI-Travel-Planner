@@ -13,7 +13,6 @@ from services.travel.activity_service import ActivityService
 from repositories.session_repository import SessionRepository
 from models.trip_details import TripDetails
 from config.settings import OPENAI_API_KEY, ASSISTANT_NAME, CONVERSATION_MODEL
-from services.travel.distance_service import DistanceService
 
 
 
@@ -54,8 +53,8 @@ class TravelSupervisor:
         self.flight_service = flight_service
         self.hotel_service = hotel_service
         self.activity_service = activity_service
-        self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model=model_name, temperature=0)
-        self.distance_service = DistanceService()
+        self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0)
+        #self.distance_service = DistanceService()
         self.logger = logging.getLogger(__name__)
 
         # Build the workflow graph
@@ -103,6 +102,7 @@ class TravelSupervisor:
         origin = trip_details.get("origin")
         destination = trip_details.get("destination")
         start_date = trip_details.get("start_date")
+        end_date = trip_details.get("end_date")
         travelers = trip_details.get("travelers")
 
         try:
@@ -111,10 +111,9 @@ class TravelSupervisor:
     origin=origin,
     destination=destination,
     start_date=start_date,
+    end_date=end_date,
     travelers=travelers
 )
-
-
 
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -139,27 +138,12 @@ class TravelSupervisor:
         budget = trip_details.get("budget")
 
         try:
-            # Calculate per night budget if total budget is provided
-            per_night_budget = None
-            if budget:
-                # Calculate number of nights
-                try:
-                    start = datetime.strptime(start_date, "%Y-%m-%d")
-                    end = datetime.strptime(end_date, "%Y-%m-%d")
-                    num_nights = (end - start).days
-                    if num_nights > 0 and budget > 0:
-                        # Allocate 40% of total budget to accommodation
-                        accommodation_budget = budget * 0.4
-                        per_night_budget = int(accommodation_budget / num_nights)
-                except Exception as e:
-                    logger.error(f"Error calculating per night budget: {e}")
-
             # Call hotel service
-            hotels = self.hotel_service.get_hotels(
+            hotels = await self.hotel_service.get_hotels(
                 destination=destination,
                 start_date=start_date,
                 end_date=end_date,
-                budget=per_night_budget
+                travelers=trip_details.get("travelers", 1)
             )
 
             end_time = datetime.now()
@@ -212,38 +196,38 @@ class TravelSupervisor:
         activities_content = activities_result.get("activities", "")
 
         # Default proximity message
-        proximity_message = "Could not determine hotel/activity proximity."
-
-        try:
-            hotels_list = hotels_content.split("|")
-            activities_list = activities_content.split("|")
-
-            # Call DistanceService
-            proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
-
-            proximity_message = proximity_human_msg.content
-
-            if "Recommend searching for closer hotels" in proximity_message:
-                # Refine hotels
-                refined_hotels_msg = self.hotel_service.get_hotels(
-                    destination=f"{state['trip_details']['destination']} city center",
-                    start_date=state["trip_details"]["start_date"],
-                    end_date=state["trip_details"]["end_date"],
-                    budget=state["trip_details"].get("budget")
-                )
-                hotels_content = refined_hotels_msg.content
-                proximity_message += "\nRefined hotel search applied."
-
-        except Exception as e:
-            self.logger.error(f"Proximity check failed: {e}")
-            proximity_message = f"Proximity check error: {e}"
+        # proximity_message = "Could not determine hotel/activity proximity."
+        #
+        # try:
+        #     hotels_list = hotels_content.split("|")
+        #     activities_list = activities_content.split("|")
+        #
+        #     # Call DistanceService
+        #     proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
+        #
+        #     proximity_message = proximity_human_msg.content
+        #
+        #     if "Recommend searching for closer hotels" in proximity_message:
+        #         # Refine hotels
+        #         refined_hotels_msg = self.hotel_service.get_hotels(
+        #             destination=f"{state['trip_details']['destination']} city center",
+        #             start_date=state["trip_details"]["start_date"],
+        #             end_date=state["trip_details"]["end_date"],
+        #             budget=state["trip_details"].get("budget")
+        #         )
+        #         hotels_content = refined_hotels_msg.content
+        #         proximity_message += "\nRefined hotel search applied."
+        #
+        # except Exception as e:
+        #     self.logger.error(f"Proximity check failed: {e}")
+        #     proximity_message = f"Proximity check error: {e}"
 
         # Update state
         state.update({
             "flights": flights_result.get("flights", []),
             "hotels": hotels_content,
-            "activities": activities_content,
-            "proximity_check": proximity_message
+            "activities": activities_content
+            #"proximity_check": proximity_message
         })
 
         return state
@@ -257,32 +241,68 @@ class TravelSupervisor:
         hotels = state["hotels"]
         activities = state["activities"]
 
+        print("Trip details:", trip_details)
+        print("Flights:", flights)
+        print("Hotels:", hotels)
+        print("Activities:", activities)
+
         # Use LLM to create a well-formatted itinerary
         messages = [
             HumanMessage(content=f"""
-            Create a comprehensive travel itinerary based on the following information(give multiple options for the flights, hotels, and activities based on budget, comfort, luxury, economy, number of people ):
+                You are an experienced travel consultant creating a personalized travel plan. Write in a friendly, conversational tone as if you're directly advising the traveler.
 
-            TRIP DETAILS:
-            {trip_details}
+                Based on the following information, create a detailed travel plan:
 
-            FLIGHT OPTIONS:
-            {flights}
+                TRIP DETAILS:
+                {trip_details}
 
-            HOTEL OPTIONS:
-            {hotels}
+                FLIGHT OPTIONS:
+                {flights}
 
-            RECOMMENDED ACTIVITIES:
-            {activities}
+                HOTEL OPTIONS:
+                {hotels}
 
-            Format the itinerary as a clear, well-organized travel plan with sections for:
-            1. Trip Overview (destination, dates, travelers)
-            2. Flight Information (select the best option)
-            3. Accommodation (select the best option)
-            4. Daily Itinerary with Activities
-            5. Budget Breakdown
+                RECOMMENDED ACTIVITIES:
+                {activities}
 
-            Make sure the itinerary is personalized based on the user's preferences.
-            """)
+                IMPORTANT INSTRUCTIONS:
+
+                1. Begin with a warm, personalized greeting acknowledging their specific trip
+
+                2. For the Flight Options section:
+                   - MAINTAIN THE EXACT FLIGHT INFORMATION FORMAT from the input
+                   - Keep all flight details intact (airline, departure/arrival times, duration, price, stops)
+                   - DO NOT summarize or modify the flight information
+                   - DO NOT use labels like "Flight A", "Flight B", etc.
+                   - Preserve the grouping by time of day (Morning/Afternoon/Evening)
+                   - When recommending flights, refer to them by their actual details (e.g., "the IndiGo flight at 11:25 AM")
+
+                3. For the Hotel Options section:
+                   - MAINTAIN THE EXACT HOTEL INFORMATION FORMAT from the input
+                   - Keep all hotel details intact (name, rating, price, location, amenities)
+                   - DO NOT summarize or modify the hotel information
+                   - DO NOT use generic labels like "Hotel A", "Hotel B", etc.
+                   - Organize hotels logically by price category (Budget-Friendly, Mid-Range, Luxury)
+                   - When recommending hotels, refer to them by their actual names and details (e.g., "the Hyatt Centric at $111 with beach access")
+                   - If hotel details provided are NULL or INSUFFICIENT, present options with your best knowledge, including FULL DETAILS for hotel name, price range, location, amenities, and target travelers
+
+                4. For the Activities section:
+                   - Present recommended activities with full details as provided
+                   - Organize logically by day or category
+                   - Make specific suggestions that complement the selected hotels and overall trip experience
+                   - For each activity, include approximate time requirements and any practical tips
+
+                5. Include a Budget Breakdown section showing estimated total costs for:
+                   - Flights
+                   - Accommodation
+                   - Activities
+                   - Meals and incidentals
+                   - Transportation
+
+                6. End with a friendly closing that offers continued assistance
+
+                ESSENTIAL: Both the flight and hotel sections MUST maintain the identical format as provided in the input, with all details preserved exactly as given.
+                """)
         ]
 
         response = await self.model.ainvoke(messages)
