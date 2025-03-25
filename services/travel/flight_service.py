@@ -57,6 +57,7 @@ You MUST follow this EXACT format for your response:
 Remember to treat this as a real conversation where you're genuinely trying to help someone make the best choice for their travel needs, using ONLY the ACTUAL flight data provided above.
 """
 
+
 class FlightService:
     """Service for handling flight-related operations using Amadeus API with integrated prompt engineering for flight selection."""
 
@@ -68,6 +69,7 @@ class FlightService:
 
     async def start(self):
         self.playwright = await async_playwright().start()
+
 
         # Local browser configuration
         self.browser = await self.playwright.chromium.launch(
@@ -162,6 +164,7 @@ class FlightService:
             await self.page.click('li[data-value="2"]')
             await self.page.wait_for_timeout(1000)
 
+
             print("Selecting dates...")
             # Click the departure date button
             await self.page.click('input[aria-label*="Departure"]')
@@ -184,6 +187,7 @@ class FlightService:
                 print("No Done button found, continuing...")
 
             return self.page.url
+
 
         except Exception as e:
             print(f"An error occurred: {str(e)}")
@@ -219,10 +223,10 @@ class FlightService:
         Query the Google Flight website real time for flight offers using the extracted trip details,
         compute key metrics (cheapest, fewest layovers, shortest duration, best options per cabin if available),
         and use prompt engineering to generate a detailed plain language flight summary message.
-        
+
         Args:
             extracted_details: A dictionary containing keys such as 'origin', 'destination', 'start_date', 'travelers'.
-                               
+
         Returns:
             A plain text string summarizing the flight offers with exact details for each offer.
         """
@@ -249,7 +253,9 @@ class FlightService:
 
         return flight_res
 
+
     async def get_flight_advisor_response(self,departing_flights, returning_flights, context=None):
+
         """Get flight advisor response based on scraped flight data."""
         context_str = f"\n### Additional Context:\n{context}" if context else ""
 
@@ -263,6 +269,7 @@ class FlightService:
         print("Generating flight advisor response...")
         response_llm = await llm.ainvoke(messages)
         advisor_response = response_llm.content.strip()
+
 
         print("Flight advisor response generated")
         return advisor_response

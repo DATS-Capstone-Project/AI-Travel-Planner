@@ -1,74 +1,17 @@
-
-
 from playwright.async_api import async_playwright
 from browser_use import Agent, Browser, BrowserConfig
-from services.Prompts.HotelPrompt import hotel_scrape_task
+from hotel_prompt import hotel_scrape_task
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 import dateparser
 import os
+import asyncio
 import json
-from typing import Dict, Any
-from datetime import datetime
-from langchain_core.messages import HumanMessage
-
 
 load_dotenv()
 
-ENHANCED_HOTEL_ADVISOR_PROMPT = """
-You are an experienced travel advisor specializing in hotel recommendations with extensive knowledge of global destinations. You have a friendly, conversational style and genuinely want to help travelers find the perfect accommodation for their needs. You provide rich, detailed information that helps travelers make informed decisions.
 
-### Your Response Format:
-Begin with a warm, detailed greeting acknowledging the traveler's trip to the destination. Include some brief insights about the destination that make their hotel choice important.
-
-Organize hotels by price category (Budget-Friendly, Mid-Range, Luxury) and for EACH hotel, provide an extensive breakdown including:
-
-```
-**[Hotel Name]**
-- **Rating:** [Rating with review count]
-- **Price:** [Price with currency symbol]
-- **Location:** [Detailed location description including neighborhood characteristics, proximity to landmarks, and transportation options]
-- **Property Overview:** [2-3 sentences describing the property's style, atmosphere, and standout features]
-- **Room Features:** [Details about typical rooms, bedding, views if mentioned]
-- **Key Amenities:** [Comprehensive list of amenities with brief descriptions of notable ones]
-- **Dining Options:** [Information about on-site restaurants or nearby dining if available]
-- **Perfect For:** [Detailed description of ideal guest types and why this property suits them]
-- **Insider Tip:** [A helpful insight not obvious from basic hotel information]
-```
-
-For each price category, after listing the hotels, include a paragraph with comparative insights about the hotels in that category, highlighting different strengths and considerations.
-
-After presenting all hotels, provide extensive recommendations that reference specific hotels based on different traveler needs:
-1. For business travelers (connectivity, location, business services)
-2. For families (space, kid-friendly features, location considerations)
-3. For luxury seekers (exceptional services, unique experiences)
-4. For budget travelers (value considerations, essential amenities)
-5. For first-time visitors (location advantages for sightseeing)
-
-Include a section on "Neighborhood Insights" that explains the character and advantages of the different areas where these hotels are located.
-
-End with a detailed, personalized closing that offers specific next steps and invites questions about particular aspects of the accommodations.
-
-### Important Format Rules:
-- Be thorough and detailed while maintaining a conversational tone
-- Include rich descriptions that help visualize each property
-- Provide context about hotel locations that helps understand their convenience
-- Highlight unique selling points with specific details
-- Make specific, well-reasoned recommendations with clear explanations
-- Include check-in/check-out dates prominently in your overview
-- Add helpful insider knowledge that wouldn't be obvious from basic hotel listings
-
-### Hotel Data:
-{hotels_data}
-
-
-{context}
-
-Remember to treat this as a real conversation where you're genuinely trying to help someone find their perfect accommodation by providing rich, nuanced information that goes beyond basic facts.
-"""
-
-
-class HotelService:
+class HotelSearchScraper:
     async def start(self, use_bright_data=True):
         self.playwright = await async_playwright().start()
 
@@ -77,7 +20,7 @@ class HotelService:
                 os.getenv("BRIGHTDATA_WSS_URL")
             )
         else:
-            self.browser = await self.playwright.chromium.launch(headless=True)
+            self.browser = await self.playwright.chromium.launch(headless=False)
 
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
@@ -102,7 +45,7 @@ class HotelService:
                         break
                 except:
                     continue
-
+            
             if not input_element:
                 raise Exception("Could not find the location search input field")
 
@@ -184,31 +127,28 @@ class HotelService:
 
             try:
                 # Get current number of adults
-                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]',
-                                                            timeout=2000)
+                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
                 if not counter:
                     raise Exception("Counter element not found")
-
+                
                 current_adults = int(await counter.text_content())
                 print(f"Current number of adults: {current_adults}")
 
                 # Calculate how many clicks needed
                 clicks_needed = abs(adults - current_adults)
-
+                
                 if adults > current_adults:
                     # Need to increase
                     print(f"Increasing adults by {clicks_needed}")
                     for i in range(clicks_needed):
                         try:
-                            add_button = await self.page.wait_for_selector('button[aria-label="Add adult"]',
-                                                                           timeout=2000)
+                            add_button = await self.page.wait_for_selector('button[aria-label="Add adult"]', timeout=2000)
                             if add_button:
                                 await add_button.click()
                                 await self.page.wait_for_timeout(1000)
-
+                                
                                 # Check if count increased
-                                counter = await self.page.wait_for_selector(
-                                    'div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
+                                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
                                 if counter:
                                     new_count = int(await counter.text_content())
                                     if new_count > current_adults:
@@ -218,7 +158,7 @@ class HotelService:
                                         print(f"Failed to increase count on attempt {i + 1}")
                                 else:
                                     print("Counter not found after click")
-
+                                    
                         except Exception as e:
                             print(f"Error during increment attempt {i + 1}: {e}")
                             continue
@@ -228,15 +168,13 @@ class HotelService:
                     print(f"Decreasing adults by {clicks_needed}")
                     for i in range(clicks_needed):
                         try:
-                            remove_button = await self.page.wait_for_selector('button[aria-label="Remove adult"]',
-                                                                              timeout=2000)
+                            remove_button = await self.page.wait_for_selector('button[aria-label="Remove adult"]', timeout=2000)
                             if remove_button:
                                 await remove_button.click()
                                 await self.page.wait_for_timeout(1000)
-
+                                
                                 # Check if count decreased
-                                counter = await self.page.wait_for_selector(
-                                    'div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
+                                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
                                 if counter:
                                     new_count = int(await counter.text_content())
                                     if new_count < current_adults:
@@ -246,17 +184,16 @@ class HotelService:
                                         print(f"Failed to decrease count on attempt {i + 1}")
                                 else:
                                     print("Counter not found after click")
-
+                                    
                         except Exception as e:
                             print(f"Error during decrement attempt {i + 1}: {e}")
                             continue
 
                 # Verify final count before closing
                 await self.page.wait_for_timeout(1000)
-                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]',
-                                                            timeout=2000)
+                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
                 final_count = int(await counter.text_content()) if counter else 2
-
+                
                 print(f"Final count before closing: {final_count}")
 
                 # Click the done button
@@ -319,8 +256,7 @@ class HotelService:
             await self.page.wait_for_load_state("networkidle")
             await self.page.wait_for_timeout(2000)
 
-            date_button = await self.page.wait_for_selector(
-                'button[data-modal-type="dates"], [aria-label="Change dates"], [aria-label="Check-in"]', timeout=5000)
+            date_button = await self.page.wait_for_selector('button[data-modal-type="dates"], [aria-label="Change dates"], [aria-label="Check-in"]', timeout=5000)
             await date_button.click()
             await self.page.wait_for_timeout(1000)
 
@@ -366,16 +302,16 @@ class HotelService:
             }"""
 
             result = await self.page.evaluate(
-                set_dates_js,
+                set_dates_js, 
                 [formatted_checkin, formatted_checkout, formatted_checkin_display, formatted_checkout_display]
             )
-
+            
             if not result['success'] or not result['verified']:
                 raise Exception(f"Failed to set dates: {result}")
 
             await self.page.wait_for_timeout(2000)
             await self.page.wait_for_load_state("networkidle")
-
+            
             try:
                 search_button = await self.page.wait_for_selector(
                     'button:has-text("Search"), button:has-text("Done"), button[aria-label*="Search"], button[aria-label*="Done"]',
@@ -385,7 +321,7 @@ class HotelService:
                     await search_button.click()
             except:
                 await self.page.keyboard.press("Enter")
-
+            
             await self.page.wait_for_load_state("networkidle")
             print(f"✅ Dates set: {formatted_checkin_display} → {formatted_checkout_display}")
 
@@ -426,97 +362,48 @@ class HotelService:
         except Exception as e:
             print(f"Error during cleanup: {e}")
 
-    async def scrape_hotels(self, url):
-        browser = Browser(config=BrowserConfig(headless=False))
-        initial_actions = [{"open_tab": {"url": url}}]
-        agent = Agent(task=hotel_scrape_task(url), llm=ChatOpenAI(model="gpt-4o-mini"), initial_actions=initial_actions,
-                      browser=browser)
-        history = await agent.run()
-        result = history.final_result()
-        await browser.close()
-        return result
 
-    async def get_hotel_url(self, destination, checkin_date, checkout_date, adults) -> str:
-        try:
-            scraper = HotelService()
-            await scraper.start(use_bright_data=False)
-            url = await scraper.search_hotels(destination, checkin_date, checkout_date, adults)
-            if not url:
-                raise Exception("Failed to get hotel URL")
-            print(f"Hotel URL: {url}")
-            return url
+async def scrape_hotels(url):
+    browser = Browser(config=BrowserConfig(headless=False))
+    initial_actions = [{"open_tab": {"url": url}}]
+    agent = Agent(task=hotel_scrape_task(url), llm=ChatOpenAI(model="gpt-4o-mini"), initial_actions=initial_actions, browser=browser)
+    history = await agent.run()
+    result = history.final_result()
+    try:
+        if isinstance(result, str):
+            result = json.loads(result)
+    except Exception as e:
+        print(f"Warning: Failed to parse hotel result: {e}")
+    await browser.close()
+    return result
 
-        finally:
-            print("Closing connection...")
-            if "scraper" in locals():
-                await scraper.close()
 
-        return None
+async def get_hotel_url(location, checkin_date, checkout_date, adults):
+    try:
+        scraper = HotelSearchScraper()
+        await scraper.start(use_bright_data=False)
+        url = await scraper.search_hotels(location, checkin_date, checkout_date, adults)
+        return url
+    finally:
+        print("Closing connection...")
+        if "scraper" in locals():
+            await scraper.close()
+    return None
 
-    async def get_hotel_recommendations(self, hotels_data, context=None):
-        """Get comprehensive hotel advisor response based on scraped hotel data."""
-        context_str = f"\n### Additional Context:\n{context}" if context else ""
 
-        # Convert the hotels_data to a pretty-printed JSON string if it's a dict
-        # if isinstance(hotels_data, dict):
-        #     hotels_json = json.dumps(hotels_data, indent=2)
-        # else:
-        #     hotels_json = hotels_data
+if __name__ == "__main__":
+    async def main():
+        location = "Las Vegas"
+        checkin_date = "Sept 27, 2025"
+        checkout_date = "Oct 2, 2025"
+        adults = 1
 
-        prompt = ENHANCED_HOTEL_ADVISOR_PROMPT.format(
-            hotels_data=hotels_data,
-            context=context_str
-        )
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
-        messages = [HumanMessage(content=prompt)]
-        print("Generating enhanced hotel advisor response...")
-        response_llm = await llm.ainvoke(messages)
-        advisor_response = response_llm.content.strip()
-
-        print("Enhanced hotel advisor response generated")
-        return advisor_response
-
-    async def get_hotels(self, destination: str, start_date: str, end_date: str, travelers: int) -> str:
-        """
-        A wrapper method to allow the supervisor to call get_flights with keyword arguments.
-        It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
-        """
-        extracted_details = {
-            "destination": destination,
-            "start_date": start_date,
-            "end_date": end_date,
-            "travelers": travelers
-        }
-        return await self.get_best_hotels(extracted_details)
-
-    async def get_best_hotels(self, extracted_details: Dict[str, Any]) -> str:
-        """
-        Query the Google Hotels website real time for hotel offers using the extracted trip details,
-        and use prompt engineering to generate a detailed plain language hotel summary message.
-
-        Args:
-            extracted_details: A dictionary containing keys such as 'destination', 'checkin_date','checkout_date','travelers'.
-
-        Returns:
-            A plain text string summarizing the hotel offers with exact details for each offer.
-        """
-        destination = extracted_details.get("destination", "")
-        start_date = extracted_details.get("start_date", "")
-        end_date = extracted_details.get("end_date", "")
-        adults = extracted_details.get("travelers", "1")
-
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
-
-        # Format to desired output
-        formatted_start_date = start_date_obj.strftime("%B %d, %Y")
-        formatted_end_date = end_date_obj.strftime("%B %d, %Y")
-
-        url = await self.get_hotel_url(destination, formatted_start_date, formatted_end_date, adults)
-        hotel_data = await self.scrape_hotels(url)
-
-        if hotel_data:
-            hotel_res = await self.get_hotel_recommendations(self, hotel_data)
-            return hotel_res
+        hotel_url = await get_hotel_url(location, checkin_date, checkout_date, adults)
+        if hotel_url:
+            print("✅ Hotel search URL:", hotel_url)
+            hotel_data = await scrape_hotels(hotel_url)
+            print("✅ Hotel data scraped successfully.")
         else:
-            raise Exception("Failed to scrape hotel data")
+            print("❌ Failed to retrieve hotel URL.")
+
+    asyncio.run(main())
