@@ -1,4 +1,5 @@
 
+
 from playwright.async_api import async_playwright
 from browser_use import Agent, Browser, BrowserConfig
 from services.Prompts.HotelPrompt import hotel_scrape_task
@@ -10,6 +11,7 @@ import json
 from typing import Dict, Any
 from datetime import datetime
 from langchain_core.messages import HumanMessage
+
 
 load_dotenv()
 
@@ -58,6 +60,7 @@ End with a detailed, personalized closing that offers specific next steps and in
 
 ### Hotel Data:
 {hotels_data}
+
 
 {context}
 

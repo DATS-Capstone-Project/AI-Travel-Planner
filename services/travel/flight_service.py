@@ -70,6 +70,7 @@ class FlightService:
     async def start(self):
         self.playwright = await async_playwright().start()
 
+
         # Local browser configuration
         self.browser = await self.playwright.chromium.launch(
             headless=False,  # Set to True for headless mode
@@ -163,6 +164,7 @@ class FlightService:
             await self.page.click('li[data-value="2"]')
             await self.page.wait_for_timeout(1000)
 
+
             print("Selecting dates...")
             # Click the departure date button
             await self.page.click('input[aria-label*="Departure"]')
@@ -185,6 +187,7 @@ class FlightService:
                 print("No Done button found, continuing...")
 
             return self.page.url
+
 
         except Exception as e:
             print(f"An error occurred: {str(e)}")
@@ -250,7 +253,9 @@ class FlightService:
 
         return flight_res
 
-    async def get_flight_advisor_response(self, departing_flights, returning_flights, context=None):
+
+    async def get_flight_advisor_response(self,departing_flights, returning_flights, context=None):
+
         """Get flight advisor response based on scraped flight data."""
         context_str = f"\n### Additional Context:\n{context}" if context else ""
 
@@ -264,6 +269,7 @@ class FlightService:
         print("Generating flight advisor response...")
         response_llm = await llm.ainvoke(messages)
         advisor_response = response_llm.content.strip()
+
 
         print("Flight advisor response generated")
         return advisor_response
