@@ -108,7 +108,7 @@ class HotelService:
 
             await self.page.evaluate('(el) => el.value = ""', input_element)
             await self.page.wait_for_timeout(500)
-            await input_element.type(location, delay=100)
+            await input_element.type(f'{location} hotels', delay=100)
             await self.page.wait_for_timeout(2000)
 
             suggestion_selectors = [
