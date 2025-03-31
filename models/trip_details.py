@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, ClassVar
 
 
 @dataclass
@@ -25,6 +25,13 @@ class TripDetails:
     def to_dict(self) -> Dict:
         """Convert to dictionary, excluding None values"""
         return {k: v for k, v in self.__dict__.items() if v is not None}
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'TripDetails':
+        """Create a TripDetails instance from a dictionary"""
+        # Filter the dictionary to only include valid fields
+        valid_fields = {k: v for k, v in data.items() if k in cls.__annotations__}
+        return cls(**valid_fields)
 
     def update(self, new_data: Dict) -> 'TripDetails':
         """Update fields from a dictionary, preserving existing values"""
