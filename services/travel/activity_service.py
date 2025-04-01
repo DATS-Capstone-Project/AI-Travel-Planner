@@ -9,7 +9,7 @@ import os
 import json
 import time
 from typing import Dict, List, TypedDict, Optional, Any
-
+import asyncio
 
 
 # Configure logger
@@ -23,7 +23,7 @@ class ActivityService:
         self.tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
         self.openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    def get_activities(self, destination: str, preferences: Optional[str] = None):
+    async def get_activities(self, destination: str, preferences: Optional[str] = None):
         """
         Get activity recommendations for a destination using the Google Places API.
 
@@ -41,7 +41,7 @@ class ActivityService:
         print(f"============================================================")
 
         # Run the research
-        result = self.research_destination(target_dest)
+        result = await self.research_destination(target_dest)
 
         if result.get("final_plan"):
             plan = result["final_plan"]
@@ -70,7 +70,7 @@ class ActivityService:
                 print("No final plan was generated and no specific error was reported.")
 
         return None
-    def research_destination(self,destination: str) -> AgentState:
+    async def research_destination(self,destination: str) -> AgentState:
         """
         Direct implementation of the travel research workflow without LangGraph
         """
@@ -123,7 +123,8 @@ class ActivityService:
             for topic in research_topics:
                 print(f"Researching: {topic}")
                 try:
-                    search_response = self.tavily.search(
+                    search_response = await asyncio.to_thread(
+                        self.tavily.search,
                         query=topic,
                         search_depth="advanced",
                         include_answer=True,
