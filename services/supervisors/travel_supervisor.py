@@ -169,7 +169,7 @@ class TravelSupervisor:
 
         try:
             # Call activities service
-            activities = self.activity_service.get_activities(
+            activities = await self.activity_service.get_activities(
                 destination=destination,
                 preferences=preferences
             )

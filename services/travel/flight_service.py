@@ -249,7 +249,7 @@ class FlightService:
 
         logger.info(f"Processed flight offers JSON: {departing_flight_result, returning_flight_result}")
 
-        flight_res = await self.get_flight_advisor_response(departing_flight_url, returning_flight_url)
+        flight_res = await self.get_flight_advisor_response(departing_flight_result, returning_flight_result)
 
         return flight_res
 
