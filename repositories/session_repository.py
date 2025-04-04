@@ -37,13 +37,17 @@ class SessionRepository:
         """Get Redis key for message history"""
         return f"session:{session_id}:messages"
 
+    def _get_itinerary_key(self, session_id: str) -> str:
+        """Get Redis key for the stored itinerary"""
+        return f"session:{session_id}:itinerary"
+
     def get_thread_id(self, session_id: str) -> Optional[str]:
-        """Get thread ID for a session"""
+        """Get thread ID for a session (legacy support)"""
         thread_id = self.redis.get(self._get_thread_key(session_id))
         return thread_id.decode('utf-8') if thread_id else None
 
     def set_thread_id(self, session_id: str, thread_id: str) -> None:
-        """Set thread ID for a session"""
+        """Set thread ID for a session (legacy support)"""
         self.redis.set(self._get_thread_key(session_id), thread_id, ex=self.default_expiry)
 
     def is_confirmed(self, session_id: str) -> bool:
@@ -56,6 +60,23 @@ class SessionRepository:
         self.redis.set(
             self._get_confirmed_key(session_id),
             '1' if confirmed else '0',
+            ex=self.default_expiry
+        )
+
+    def has_itinerary(self, session_id: str) -> bool:
+        """Check if an itinerary has been generated for this session"""
+        return self.redis.exists(self._get_itinerary_key(session_id))
+
+    def get_itinerary(self, session_id: str) -> str:
+        """Get the stored itinerary for a session"""
+        itinerary = self.redis.get(self._get_itinerary_key(session_id))
+        return itinerary.decode('utf-8') if itinerary else ""
+
+    def set_itinerary(self, session_id: str, itinerary: str) -> None:
+        """Store the itinerary for a session"""
+        self.redis.set(
+            self._get_itinerary_key(session_id),
+            itinerary,
             ex=self.default_expiry
         )
 
@@ -113,7 +134,8 @@ class SessionRepository:
             self._get_thread_key(session_id),
             self._get_confirmed_key(session_id),
             self._get_trip_details_key(session_id),
-            self._get_messages_key(session_id)
+            self._get_messages_key(session_id),
+            self._get_itinerary_key(session_id)
         ]
 
         # Delete all keys for this session
@@ -134,10 +156,50 @@ class SessionRepository:
             self._get_thread_key(session_id),
             self._get_confirmed_key(session_id),
             self._get_trip_details_key(session_id),
-            self._get_messages_key(session_id)
+            self._get_messages_key(session_id),
+            self._get_itinerary_key(session_id)
         ]
 
         # Set expiration for each key
         for key in keys:
             if self.redis.exists(key):
                 self.redis.expire(key, expiry)
+
+    def clear_user_sessions(self, pattern: str) -> int:
+        """Clear all sessions matching a specific pattern (e.g., user_123_*)
+
+        Args:
+            pattern: The pattern to match session IDs (e.g., 'user_123_*')
+
+        Returns:
+            Number of sessions cleared
+        """
+        # Find all sessions matching the pattern
+        session_keys = []
+        cursor = 0
+        while True:
+            cursor, keys = self.redis.scan(cursor, match=f"session:{pattern}*", count=100)
+            if keys:
+                session_keys.extend(keys)
+            if cursor == 0:
+                break
+
+        # Extract unique session IDs from the keys
+        session_ids = set()
+        for key in session_keys:
+            # Extract the session ID from the key format "session:user_id_xyz:something"
+            parts = key.decode('utf-8').split(':')
+            if len(parts) >= 2:
+                session_ids.add(parts[1])
+
+        # Clear each session
+        cleared_count = 0
+        for session_id in session_ids:
+            try:
+                self.reset_session(session_id)
+                cleared_count += 1
+            except Exception as e:
+                logger.error(f"Error clearing session {session_id}: {e}")
+
+        logger.info(f"Cleared {cleared_count} sessions matching pattern '{pattern}'")
+        return cleared_count
