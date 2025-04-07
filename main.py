@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from redis import Redis
 from models.chat_models import ChatRequest, ChatResponse
-from services.travel.flight import FlightService
+from services.travel.flight_service import FlightService
 from services.travel.hotel_service import HotelService
 from services.travel.activity_service import ActivityService
 from repositories.session_repository import SessionRepository

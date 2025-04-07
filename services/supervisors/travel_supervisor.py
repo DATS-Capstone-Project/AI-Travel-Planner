@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
-from services.travel.flight import FlightService
+from services.travel.flight_service import FlightService
 from services.travel.hotel_service import HotelService
 from services.travel.activity_service import ActivityService
 from models.trip_details import TripDetails
