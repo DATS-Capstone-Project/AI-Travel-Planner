@@ -100,6 +100,9 @@ class FlightService:
             # Try different selectors for the dropdown item
             dropdown_selectors = [
                 f'li[role="option"][aria-label*="{airport_name}"]',
+
+                f'li[role="option"[aria-label*="Washington"]'
+                f'li[role="option"]',
                 f'li[role="option"] .zsRT0d:text-is("{airport_name}")',
                 f'.zsRT0d:has-text("{airport_name}")',
             ]

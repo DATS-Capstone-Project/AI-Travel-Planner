@@ -67,11 +67,13 @@ Extract ONLY the following travel information from the user's message:
    - if user says "from", location should be set to origin.
    - if user inputs a city that doesnt exist, ask the user to enter a city name.
    - if the user inputs a city that has alphabets and numbers, ask the user to input the correct origin city name.
+   - if the user inputs cities like "washington dc" or " delhi", store it as "Washington DC" and "New Delhi".
 2. destination: The specific city or location the user wants to visit
    - Return the full, proper name of the destination
    - if user says "to", destination should be set to destination
    - if user inputs a city that doesnt exist, ask the user to enter a city name.
    - if the user inputs a city that has alphabets and numbers, ask the user to input the correct destination city name.
+    - if the user inputs cities like "washington dc" or " delhi", store it as "Washington DC" and "New Delhi".
 
 3. start_date: Convert any SPECIFIC date mention to YYYY-MM-DD format.
    - Pay EXTREME attention to ordinal numbers (1st → 01, 2nd → 02, 3rd → 03, etc.).
