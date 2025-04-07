@@ -9,7 +9,7 @@ from config.settings import OPENAI_API_KEY, CONVERSATION_MODEL
 from repositories.session_repository import SessionRepository
 from services.extraction.extractor_factory import ExtractorFactory
 from services.travel.activity_service import ActivityService
-from services.travel.flight_service import FlightService
+from services.travel.flight import FlightService
 from services.travel.hotel_service import HotelService
 from services.supervisors.travel_supervisor import TravelSupervisor
 from models.trip_details import TripDetails

@@ -25,14 +25,12 @@ You MUST follow this EXACT format for your response:
 1. Begin with a warm greeting acknowledging the traveler's trip
 2. Organize flights by direction (outbound/return) and time of day (morning/afternoon/evening)
 3. For EACH flight, include these EXACT details in this format:
-   ```
    **[Airline Name]**
    - **Departure:** [Time]
    - **Arrival:** [Time]
    - **Duration:** [Duration in hr min format]
    - **Price:** [Price with currency symbol]
    - **Stops:** [Nonstop or number of stops]
-   ```
 4. End with specific recommendations that reference the exact flight details (not generic labels)
 
 ### CRITICAL INSTRUCTIONS:
