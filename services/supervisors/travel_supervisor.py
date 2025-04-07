@@ -144,7 +144,8 @@ class TravelSupervisor:
                 destination=destination,
                 start_date=start_date,
                 end_date=end_date,
-                travelers=trip_details.get("travelers", 1)
+                travelers=trip_details.get("travelers", 1),
+                budget=budget
             )
 
             end_time = datetime.now()
@@ -190,7 +191,8 @@ class TravelSupervisor:
         activities_task = asyncio.create_task(self._activities_agent(state))
 
         flights_result, hotels_result, activities_result = await asyncio.gather(
-            flights_task, hotels_task, activities_task
+            flights_task,
+            hotels_task, activities_task
         )
 
         hotels_content = hotels_result.get("hotels", "")
@@ -262,6 +264,45 @@ class TravelSupervisor:
 
                 HOTEL OPTIONS:
                 {hotels}
+                 Present hotels exactly as provided, maintaining all details and formatting. Only show available categories (Budget-Friendly/Mid-Range/Luxury).
+
+            For each hotel:
+            ```
+            **[Hotel Name]**
+            - Rating and reviews
+            - Price per night and total price
+            - Location details
+            - Property description
+            - Key amenities
+            - Perfect for (target travelers)
+            - Nearby attractions
+            - Special tips
+            ```
+
+            After each category, provide a COMPARATIVE ANALYSIS of:
+            - Price-to-value comparison
+            - Location advantages/disadvantages
+            - Amenity differences
+            - Best suited traveler types
+         
+             BUDGET BREAKDOWN
+            Provide a detailed budget breakdown:
+            - Flights
+            - Accommodation
+            - Activities
+            - Meals and incidentals
+            - Transportation
+            - Total estimated cost
+            
+            
+            FINAL RECOMMENDATIONS
+            Provide a "BEST MATCH" recommendation including:
+            - Best flight option with reasoning
+            - Best hotel option with reasoning
+            - Must-do activities
+            - Money-saving tips
+            - Practical travel tips
+
 
                 RECOMMENDED ACTIVITIES:
                 {activities}

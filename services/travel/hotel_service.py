@@ -1,522 +1,347 @@
-
-
-from playwright.async_api import async_playwright
-from browser_use import Agent, Browser, BrowserConfig
-from services.Prompts.HotelPrompt import hotel_scrape_task
 from dotenv import load_dotenv
+from serpapi import GoogleSearch
 from langchain_openai import ChatOpenAI
-import dateparser
+from datetime import datetime
+from typing import Dict, Any
+import logging
 import os
 import json
-from typing import Dict, Any
-from datetime import datetime
-from langchain_core.messages import HumanMessage
-
 
 load_dotenv()
 
-ENHANCED_HOTEL_ADVISOR_PROMPT = """
-You are an experienced travel advisor specializing in hotel recommendations with extensive knowledge of global destinations. You have a friendly, conversational style and genuinely want to help travelers find the perfect accommodation for their needs. You provide rich, detailed information that helps travelers make informed decisions.
+ENHANCED_HOTEL_ADVISOR_PROMPT_SERPAPI = """
+You are an experienced travel advisor specializing in hotel recommendations. Your goal is to help travelers find their perfect accommodation by providing detailed, personalized insights. Be friendly and conversational while maintaining professionalism.
 
-### Your Response Format:
-Begin with a warm, detailed greeting acknowledging the traveler's trip to the destination. Include some brief insights about the destination that make their hotel choice important.
+### REQUIRED SECTIONS (Follow this exact order):
 
-Organize hotels by price category (Budget-Friendly, Mid-Range, Luxury) and for EACH hotel, provide an extensive breakdown including:
+1. GREETING & DESTINATION OVERVIEW
+- Warm welcome acknowledging the trip dates and destination
+- Brief insights about why hotel location matters in this destination
+- Any seasonal considerations for the selected dates
 
-```
-**[Hotel Name]**
+2. AVAILABLE HOTEL OPTIONS
+[Only include categories that have hotels. For each category (Budget-Friendly/Mid-Range/Luxury), provide:]
+
+Category Name:
+
+**Hotel Name**
 - **Rating:** [Rating with review count]
-- **Price:** [Price with currency symbol]
-- **Location:** [Detailed location description including neighborhood characteristics, proximity to landmarks, and transportation options]
-- **Property Overview:** [2-3 sentences describing the property's style, atmosphere, and standout features]
-- **Room Features:** [Details about typical rooms, bedding, views if mentioned]
-- **Key Amenities:** [Comprehensive list of amenities with brief descriptions of notable ones]
-- **Dining Options:** [Information about on-site restaurants or nearby dining if available]
-- **Perfect For:** [Detailed description of ideal guest types and why this property suits them]
-- **Insider Tip:** [A helpful insight not obvious from basic hotel information]
+- **Price per Night:** [Price with currency symbol]
+- **Total Price:** [Total price with currency symbol]
+- **Location:** [Location and neighborhood insights]
+- **Property Overview:** [Describe style, atmosphere, notable features]
+- **Key Amenities:** [List of amenities]
+- **Perfect For:** [Ideal guest types]
+- **Nearby Attractions:** [List of nearby attractions]
+- **Insider Tip:** [One unique or lesser-known tip]
 ```
 
-For each price category, after listing the hotels, include a paragraph with comparative insights about the hotels in that category, highlighting different strengths and considerations.
+[After EACH category, provide a COMPARATIVE ANALYSIS:]
+- Price-to-value comparison between hotels
+- Location advantages/disadvantages
+- Amenity differences
+- Best suited traveler types
 
-After presenting all hotels, provide extensive recommendations that reference specific hotels based on different traveler needs:
-1. For business travelers (connectivity, location, business services)
-2. For families (space, kid-friendly features, location considerations)
-3. For luxury seekers (exceptional services, unique experiences)
-4. For budget travelers (value considerations, essential amenities)
-5. For first-time visitors (location advantages for sightseeing)
+3. NEIGHBORHOOD INSIGHTS
+[For each neighborhood where hotels are located:]
+- Area character and atmosphere
+- Safety considerations
+- Transportation access
+- Dining and entertainment options
+- Proximity to major attractions
 
-Include a section on "Neighborhood Insights" that explains the character and advantages of the different areas where these hotels are located.
+4. TRAVELER-TYPE RECOMMENDATIONS
+[Only include traveler types that have suitable options:]
+- Business travelers
+- Families
+- Luxury seekers
+- Budget travelers
+- First-time visitors
 
-End with a detailed, personalized closing that offers specific next steps and invites questions about particular aspects of the accommodations.
+5. BEST MATCH RECOMMENDATION
+**Top Recommendation: [Hotel Name]**
+- Why this hotel stands out
+- Value for money analysis
+- Location benefits
+- Key amenities that make it special
+- Target traveler match
+- Guest satisfaction highlights
 
-### Important Format Rules:
-- Be thorough and detailed while maintaining a conversational tone
-- Include rich descriptions that help visualize each property
-- Provide context about hotel locations that helps understand their convenience
-- Highlight unique selling points with specific details
-- Make specific, well-reasoned recommendations with clear explanations
-- Include check-in/check-out dates prominently in your overview
-- Add helpful insider knowledge that wouldn't be obvious from basic hotel listings
+[Must include 2-3 sentences explaining why this specific hotel is the best choice]
+
+6. CLOSING
+- Summary of key points
+- Next steps for booking
+- Invitation for questions
+
+### CRITICAL REQUIREMENTS:
+- Stay dates: **{checkin} to {checkout}**
+- Only show categories with available hotels
+- Provide comparative analysis for each category
+- Include specific reasoning for the best match
+- Base all recommendations on the provided data only
 
 ### Hotel Data:
 {hotels_data}
 
-
 {context}
-
-Remember to treat this as a real conversation where you're genuinely trying to help someone find their perfect accommodation by providing rich, nuanced information that goes beyond basic facts.
 """
 
-
 class HotelService:
-    async def start(self, use_bright_data=True):
-        self.playwright = await async_playwright().start()
+    def __init__(self):
+        self.serpapi_key = os.getenv("SERPAPI_KEY")
+        if not self.serpapi_key:
+            raise ValueError("SERPAPI_KEY environment variable is not set")
+        
+    async def calculate_hotel_budget(self, total_budget: float, num_days: int) -> Dict[str, float]:
+        """Calculate hotel budget ranges based on total trip budget"""
+        try:
+            # Rough breakdown of total budget
+            # 40% for hotels, 30% for flights, 30% for food, activities, etc.
+            hotel_total_budget = total_budget * 0.4
+            per_night_budget = hotel_total_budget / num_days
 
-        if use_bright_data:
-            self.browser = await self.playwright.chromium.connect(
-                os.getenv("BRIGHTDATA_WSS_URL")
-            )
+            # Calculate price ranges
+            return {
+                "budget_max": per_night_budget * 0.7,  # 70% of average for budget category
+                "midrange_max": per_night_budget * 1.2,  # 120% of average for mid-range
+                "luxury_min": per_night_budget * 1.2  # Anything above mid-range is luxury
+            }
+        except Exception as e:
+            logging.error(f"Error calculating hotel budget: {str(e)}")
+            raise
+
+    async def determine_hotel_category(self, per_night_budget: float) -> str:
+        """
+        Determine hotel category based on per night budget
+        Budget: < $150
+        Mid-range: $150-$300
+        Luxury: > $300
+        """
+        if per_night_budget < 150:
+            return "budget"
+        elif per_night_budget <= 300:
+            return "midrange"
         else:
-            self.browser = await self.playwright.chromium.launch(headless=True)
+            return "luxury"
 
-        self.context = await self.browser.new_context()
-        self.page = await self.context.new_page()
-
-    async def clear_and_fill_location(self, location):
+    async def get_hotel_results_from_serpapi(self, destination, checkin_date, checkout_date, adults, total_budget, currency="USD", country="us", lang="en"):
         try:
-            print("📍 Filling in location...")
-            await self.page.wait_for_load_state("networkidle")
-            await self.page.wait_for_load_state("domcontentloaded")
-            input_selectors = [
-                'input[aria-label="Search for places, hotels and more"]',
-                'input[placeholder*="Search"]',
-                'input[aria-label*="Search"]',
-                'input[data-placeholder*="Search"]'
-            ]
-            input_element = None
-            for selector in input_selectors:
-                try:
-                    input_element = await self.page.wait_for_selector(selector, timeout=5000)
-                    if input_element:
-                        print(f"Found input using selector: {selector}")
-                        break
-                except:
-                    continue
+            logging.info(f"Fetching hotels for {destination} from {checkin_date} to {checkout_date} for {adults} adults")
+            
+            if not isinstance(adults, int) or adults < 1:
+                raise ValueError(f"Invalid number of adults: {adults}. Must be a positive integer.")
 
-            if not input_element:
-                raise Exception("Could not find the location search input field")
+            # Calculate number of days
+            start_date = datetime.strptime(checkin_date, "%Y-%m-%d")
+            end_date = datetime.strptime(checkout_date, "%Y-%m-%d")
+            num_days = (end_date - start_date).days
 
-            await self.page.evaluate('(el) => el.value = ""', input_element)
-            await self.page.wait_for_timeout(500)
-            await input_element.type(f'{location} hotels', delay=100)
-            await self.page.wait_for_timeout(2000)
+            # Calculate hotel budget (40% of total)
+            hotel_budget = total_budget * 0.4
+            per_night_budget = hotel_budget / num_days
 
-            suggestion_selectors = [
-                'li[role="option"]',
-                '[role="listbox"] li',
-                '[role="listbox"] [role="option"]',
-                '.location-suggestion',
-                '[data-index="0"]'
-            ]
-            suggestion = None
-            for selector in suggestion_selectors:
-                try:
-                    suggestion = await self.page.wait_for_selector(selector, timeout=5000)
-                    if suggestion:
-                        print(f"Found suggestion using selector: {selector}")
-                        break
-                except:
-                    continue
+            # Determine category based on per night budget
+            category = await self.determine_hotel_category(per_night_budget)
+            logging.info(f"Based on per night budget of ${per_night_budget:.2f}, searching for {category} hotels")
 
-            if not suggestion:
-                print("No suggestion found, trying to submit with Enter...")
-                await self.page.keyboard.press("Enter")
-            else:
-                await suggestion.click()
+            # Base parameters for API call
+            params = {
+                "engine": "google_hotels",
+                "q": f"{destination}",
+                "check_in_date": checkin_date,
+                "check_out_date": checkout_date,
+                "adults": str(adults),
+                "children": "0",
+                "currency": currency,
+                "gl": country,
+                "hl": lang,
+                "sort_by": "3",  # Sort by lowest price
+                "api_key": self.serpapi_key
+            }
 
-            await self.page.wait_for_load_state("networkidle")
-            await self.page.wait_for_timeout(2000)
-            current_value = await self.page.evaluate('(el) => el.value', input_element)
-            if not current_value:
-                raise Exception("Location input appears to be empty after setting")
+            # Add category-specific parameters
+            if category == "budget":
+                params.update({
+                    "max_price": str(int(150)),  # Max $150 per night
+                    "sort_by": "3"  # Prioritize lowest price
+                })
+            elif category == "midrange":
+                params.update({
+                    "min_price": str(int(150)),
+                    "max_price": str(int(300)),
+                    "rating": "7"  # At least 3.5+ rating
+                })
+            else:  # luxury
+                params.update({
+                    "min_price": str(int(300)),
+                    "max_price": str(int(per_night_budget)),  # Stay within budget
+                    "rating": "8",  # At least 4.0+ rating
+                    "hotel_class": "4,5"  # 4-5 star hotels
+                })
 
-            print(f"✅ Location set to: {current_value}")
+            # Make API call
+            logging.info(f"Searching for {category} hotels with parameters: {params}")
+            search = GoogleSearch(params)
+            results = search.get_dict()
+
+            if "error" in results:
+                error_message = results.get("error", "Unknown error")
+                logging.error(f"SerpAPI error: {error_message}")
+                raise Exception(f"SerpAPI returned an error: {error_message}")
+            
+            if "properties" not in results:
+                logging.warning(f"No properties found in results. Available keys: {list(results.keys())}")
+                return None
+                
+            properties = results["properties"]
+            if not properties:
+                logging.warning("Properties array is empty")
+                return None
+                
+            # Transform properties data to match expected hotel format
+            hotels = []
+            for prop in properties:
+                # Price extraction logic remains the same
+                rate_per_night = prop.get("rate_per_night", {})
+                price_per_night = rate_per_night.get("lowest", "") or rate_per_night.get("before_taxes_fees", "")
+                
+                total_rate = prop.get("total_rate", {})
+                total_price = total_rate.get("lowest", "") or total_rate.get("before_taxes_fees", "")
+                
+                if not price_per_night and prop.get("prices"):
+                    first_price = prop["prices"][0]
+                    rate_info = first_price.get("rate_per_night", {})
+                    price_per_night = rate_info.get("lowest", "") or rate_info.get("before_taxes_fees", "")
+                
+                hotel = {
+                    "name": prop.get("name", ""),
+                    "rating": prop.get("overall_rating", 0),
+                    "reviews": prop.get("reviews", 0),
+                    "price_per_night": price_per_night or "Price not available",
+                    "total_price": total_price or "Total price not available",
+                    "location": {
+                        "address": prop.get("address", ""),
+                        "coordinates": prop.get("gps_coordinates", {})
+                    },
+                    "description": prop.get("description", ""),
+                    "amenities": prop.get("amenities", []),
+                    "hotel_class": prop.get("hotel_class", ""),
+                    "check_in_time": prop.get("check_in_time", ""),
+                    "check_out_time": prop.get("check_out_time", ""),
+                    "deal": prop.get("deal", ""),
+                    "deal_description": prop.get("deal_description", ""),
+                    "location_rating": prop.get("location_rating", 0),
+                    "reviews_breakdown": prop.get("reviews_breakdown", []),
+                    "nearby_places": prop.get("nearby_places", []),
+                    "category": category  # Add the determined category
+                }
+                hotels.append(hotel)
+            
+            # Sort hotels by price
+            hotels.sort(key=lambda x: float(str(x["price_per_night"]).replace("$", "").replace(",", "")) 
+                       if isinstance(x["price_per_night"], (str, int, float)) and 
+                       str(x["price_per_night"]).replace("$", "").replace(",", "").replace(".", "").isdigit() 
+                       else float('inf'))
+            
+            logging.info(f"Successfully found {len(hotels)} {category} hotels")
+            logging.info("Sample of hotels being sent to LLM advisor:")
+            for idx, hotel in enumerate(hotels[:3]):
+                logging.info(f"\nHotel {idx + 1}:")
+                logging.info(f"Name: {hotel['name']}")
+                logging.info(f"Rating: {hotel['rating']} ({hotel['reviews']} reviews)")
+                logging.info(f"Price per night: {hotel['price_per_night']}")
+                logging.info(f"Total price: {hotel['total_price']}")
+                logging.info(f"Hotel class: {hotel['hotel_class']}")
+            
+            return hotels
 
         except Exception as e:
-            print(f"⚠️ Error while setting location: {str(e)}")
-            try:
-                encoded_location = location.replace(" ", "+")
-                direct_url = f"https://www.google.com/travel/hotels/search?q={encoded_location}"
-                await self.page.goto(direct_url)
-                await self.page.wait_for_load_state("networkidle")
-                print("✅ Recovered using direct URL navigation")
-            except Exception as recovery_error:
-                raise Exception(f"Failed to set location: {str(e)}\nRecovery error: {str(recovery_error)}")
+            logging.error(f"Error in get_hotel_results_from_serpapi: {str(e)}")
+            raise Exception(f"Failed to fetch hotel data from SerpAPI: {str(e)}")
 
-    async def set_travelers(self, adults: int = 2):
+    async def get_best_hotels(self, extracted_details: Dict[str, Any]) -> str:
         try:
-            print(f"👥 Setting number of adults to: {adults}")
-            await self.page.wait_for_load_state("networkidle")
-            await self.page.wait_for_timeout(1000)
+            destination = extracted_details.get("destination")
+            start_date = extracted_details.get("start_date")
+            end_date = extracted_details.get("end_date")
+            travelers = extracted_details.get("travelers")
+            total_budget = extracted_details.get("budget")
 
-            # Find and click the travelers button
-            traveler_selectors = [
-                'div[class*="rb1Kdf"]',
-                'div[role="button"][aria-label*="Number of travellers"]',
-                'div[class*="rb1Kdf"][role="button"]'
-            ]
+            if not all([destination, start_date, end_date, travelers, total_budget]):
+                raise ValueError("Missing required parameters: destination, start_date, end_date, travelers, or budget")
 
-            traveler_button = None
-            for selector in traveler_selectors:
-                try:
-                    traveler_button = await self.page.wait_for_selector(selector, timeout=2000)
-                    if traveler_button:
-                        print(f"Found traveler button using selector: {selector}")
-                        break
-                except:
-                    continue
+            if not isinstance(travelers, int) or travelers < 1:
+                raise ValueError(f"Invalid number of travelers: {travelers}. Must be a positive integer.")
 
-            if not traveler_button:
-                raise Exception("Could not find the travelers button")
+            if not isinstance(total_budget, (int, float)) or total_budget <= 0:
+                raise ValueError(f"Invalid budget: {total_budget}. Must be a positive number.")
 
-            await traveler_button.click()
-            await self.page.wait_for_timeout(2000)
+            # Format dates
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+            
+            formatted_start_date = start_date_obj.strftime("%Y-%m-%d")
+            formatted_end_date = end_date_obj.strftime("%Y-%m-%d")
 
-            try:
-                # Get current number of adults
-                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]',
-                                                            timeout=2000)
-                if not counter:
-                    raise Exception("Counter element not found")
+            logging.info(f"Searching hotels in {destination} from {formatted_start_date} to {formatted_end_date}")
 
-                current_adults = int(await counter.text_content())
-                print(f"Current number of adults: {current_adults}")
-
-                # Calculate how many clicks needed
-                clicks_needed = abs(adults - current_adults)
-
-                if adults > current_adults:
-                    # Need to increase
-                    print(f"Increasing adults by {clicks_needed}")
-                    for i in range(clicks_needed):
-                        try:
-                            add_button = await self.page.wait_for_selector('button[aria-label="Add adult"]',
-                                                                           timeout=2000)
-                            if add_button:
-                                await add_button.click()
-                                await self.page.wait_for_timeout(1000)
-
-                                # Check if count increased
-                                counter = await self.page.wait_for_selector(
-                                    'div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
-                                if counter:
-                                    new_count = int(await counter.text_content())
-                                    if new_count > current_adults:
-                                        current_adults = new_count
-                                        print(f"Successfully increased count to {current_adults}")
-                                    else:
-                                        print(f"Failed to increase count on attempt {i + 1}")
-                                else:
-                                    print("Counter not found after click")
-
-                        except Exception as e:
-                            print(f"Error during increment attempt {i + 1}: {e}")
-                            continue
-
-                elif adults < current_adults:
-                    # Need to decrease
-                    print(f"Decreasing adults by {clicks_needed}")
-                    for i in range(clicks_needed):
-                        try:
-                            remove_button = await self.page.wait_for_selector('button[aria-label="Remove adult"]',
-                                                                              timeout=2000)
-                            if remove_button:
-                                await remove_button.click()
-                                await self.page.wait_for_timeout(1000)
-
-                                # Check if count decreased
-                                counter = await self.page.wait_for_selector(
-                                    'div[aria-label*="Adults"] span[jsname="NnAfwf"]', timeout=2000)
-                                if counter:
-                                    new_count = int(await counter.text_content())
-                                    if new_count < current_adults:
-                                        current_adults = new_count
-                                        print(f"Successfully decreased count to {current_adults}")
-                                    else:
-                                        print(f"Failed to decrease count on attempt {i + 1}")
-                                else:
-                                    print("Counter not found after click")
-
-                        except Exception as e:
-                            print(f"Error during decrement attempt {i + 1}: {e}")
-                            continue
-
-                # Verify final count before closing
-                await self.page.wait_for_timeout(1000)
-                counter = await self.page.wait_for_selector('div[aria-label*="Adults"] span[jsname="NnAfwf"]',
-                                                            timeout=2000)
-                final_count = int(await counter.text_content()) if counter else 2
-
-                print(f"Final count before closing: {final_count}")
-
-                # Click the done button
-                done_selectors = [
-                    'button:has-text("Done")',
-                    'button[aria-label="Done"]',
-                    'button[class*="VfPpkd-LgbsSe"]',
-                    'button[class*="ksBjEc"]'
-                ]
-
-                done_clicked = False
-                for selector in done_selectors:
-                    try:
-                        done_button = await self.page.wait_for_selector(selector, timeout=2000)
-                        if done_button:
-                            await done_button.click()
-                            done_clicked = True
-                            print("Clicked done button")
-                            break
-                    except:
-                        continue
-
-                if not done_clicked:
-                    print("No done button found, pressing Enter")
-                    await self.page.keyboard.press('Enter')
-
-                await self.page.wait_for_load_state("networkidle")
-                print(f"✅ Number of adults set to {final_count}")
-
-                if final_count != adults:
-                    raise Exception(f"Failed to set correct number of adults. Target: {adults}, Actual: {final_count}")
-
-            except Exception as e:
-                print(f"Error adjusting adults: {e}")
-                raise
-
-        except Exception as e:
-            raise Exception(f"❌ Failed to set travelers: {e}")
-
-    async def select_dates(self, checkin_date_str, checkout_date_str):
-        try:
-            print("⌨️ Setting dates via JavaScript...")
-
-            checkin_dt = dateparser.parse(checkin_date_str)
-            checkout_dt = dateparser.parse(checkout_date_str)
-
-            if not checkin_dt or not checkout_dt:
-                raise Exception("Could not parse one or both dates.")
-
-            formatted_checkin_display = checkin_dt.strftime("%a, %b %d")
-            formatted_checkout_display = checkout_dt.strftime("%a, %b %d")
-            formatted_checkin = checkin_dt.strftime("%Y-%m-%d")
-            formatted_checkout = checkout_dt.strftime("%Y-%m-%d")
-
-            print(f"Setting dates: {formatted_checkin_display} → {formatted_checkout_display}")
-
-            self.checkin_date = formatted_checkin_display
-            self.checkout_date = formatted_checkout_display
-
-            await self.page.wait_for_load_state("networkidle")
-            await self.page.wait_for_timeout(2000)
-
-            date_button = await self.page.wait_for_selector(
-                'button[data-modal-type="dates"], [aria-label="Change dates"], [aria-label="Check-in"]', timeout=5000)
-            await date_button.click()
-            await self.page.wait_for_timeout(1000)
-
-            set_dates_js = """([checkinDate, checkoutDate, checkinDisplay, checkoutDisplay]) => {
-                const findInput = (label) => {
-                    const inputs = document.querySelectorAll('input[aria-label]');
-                    return Array.from(inputs).find(el => 
-                        el.getAttribute('aria-label').toLowerCase().includes(label.toLowerCase())
-                    );
-                }; 
-                const checkinInput = findInput('check-in');
-                const checkoutInput = findInput('check-out');
-                if (!checkinInput || !checkoutInput) throw new Error('Could not find date inputs');
-                const createEvent = (type, options = {}) => {
-                    return (type === 'keydown') ? new KeyboardEvent(type, {
-                        key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, ...options
-                    }) : new Event(type, { bubbles: true, ...options });
-                };
-                const updateInput = (input, value, display) => {
-                    input.focus(); input.dispatchEvent(createEvent('focus'));
-                    input.value = ''; input.dispatchEvent(createEvent('input'));
-                    input.value = display;
-                    input.setAttribute('data-initial-value', value);
-                    input.setAttribute('data-date', value);
-                    input.dispatchEvent(createEvent('input'));
-                    input.dispatchEvent(createEvent('change'));
-                    input.dispatchEvent(createEvent('keydown'));
-                    input.blur(); input.dispatchEvent(createEvent('blur'));
-                    return input.value === display;
-                };
-                updateInput(checkinInput, checkinDate, checkinDisplay);
-                setTimeout(() => {
-                    updateInput(checkoutInput, checkoutDate, checkoutDisplay);
-                    const buttons = document.querySelectorAll('button');
-                    const searchButton = Array.from(buttons).find(button => {
-                        const text = (button.textContent || '').toLowerCase();
-                        const label = (button.getAttribute('aria-label') || '').toLowerCase();
-                        return (text.includes('search') || text.includes('done') || label.includes('search') || label.includes('done')) && button.offsetParent !== null;
-                    });
-                    if (searchButton) searchButton.click();
-                }, 500);
-                return { success: true, verified: true, checkin: checkinInput.value, checkout: checkoutInput.value };
-            }"""
-
-            result = await self.page.evaluate(
-                set_dates_js,
-                [formatted_checkin, formatted_checkout, formatted_checkin_display, formatted_checkout_display]
+            hotel_data = await self.get_hotel_results_from_serpapi(
+                destination=destination,
+                checkin_date=formatted_start_date,
+                checkout_date=formatted_end_date,
+                adults=travelers,
+                total_budget=total_budget
             )
 
-            if not result['success'] or not result['verified']:
-                raise Exception(f"Failed to set dates: {result}")
+            if not hotel_data:
+                return f"Sorry, I couldn't find any hotels in {destination} for your dates and budget. Please try different dates or adjust your budget."
 
-            await self.page.wait_for_timeout(2000)
-            await self.page.wait_for_load_state("networkidle")
+            return await self.get_hotel_recommendations(
+                hotels_data=hotel_data,
+                checkin=start_date_obj.strftime("%B %d, %Y"),
+                checkout=end_date_obj.strftime("%B %d, %Y")
+            )
 
-            try:
-                search_button = await self.page.wait_for_selector(
-                    'button:has-text("Search"), button:has-text("Done"), button[aria-label*="Search"], button[aria-label*="Done"]',
-                    timeout=5000
-                )
-                if search_button:
-                    await search_button.click()
-            except:
-                await self.page.keyboard.press("Enter")
-
-            await self.page.wait_for_load_state("networkidle")
-            print(f"✅ Dates set: {formatted_checkin_display} → {formatted_checkout_display}")
-
+        except ValueError as ve:
+            logging.error(f"Validation error: {str(ve)}")
+            raise
         except Exception as e:
-            raise Exception(f"Failed to set dates: {e}")
+            logging.error(f"Error in get_best_hotels: {str(e)}")
+            raise Exception(f"❌ Failed to fetch hotel data from SerpAPI: {str(e)}")
 
-    async def search_hotels(self, location, checkin_date, checkout_date, adults):
-        try:
-            print("🌐 Navigating to Google Hotels...")
-            await self.page.goto("https://www.google.com/travel/hotels")
-            await self.page.wait_for_load_state("domcontentloaded")
-            await self.page.wait_for_load_state("networkidle")
-            await self.page.wait_for_timeout(2000)
-
-            await self.clear_and_fill_location(location)
-            await self.set_travelers(adults=adults)
-            await self.select_dates(checkin_date, checkout_date)
-
-            await self.page.wait_for_timeout(3000)
-            await self.page.wait_for_load_state("networkidle")
-            await self.page.keyboard.press("Enter")
-            await self.page.wait_for_load_state("networkidle")
-
-            current_url = self.page.url
-            if "hotels" not in current_url or "search" not in current_url:
-                raise Exception("Not on hotel search results page")
-
-            return current_url
-        except Exception as e:
-            print(f"An error occurred during hotel search: {e}")
-            return None
-
-    async def close(self):
-        try:
-            await self.context.close()
-            await self.browser.close()
-            await self.playwright.stop()
-        except Exception as e:
-            print(f"Error during cleanup: {e}")
-
-    async def scrape_hotels(self, url):
-        browser = Browser(config=BrowserConfig(headless=False))
-        initial_actions = [{"open_tab": {"url": url}}]
-        agent = Agent(task=hotel_scrape_task(url), llm=ChatOpenAI(model="gpt-4o-mini"), initial_actions=initial_actions,
-                      browser=browser)
-        history = await agent.run()
-        result = history.final_result()
-        await browser.close()
-        return result
-
-    async def get_hotel_url(self, destination, checkin_date, checkout_date, adults) -> str:
-        try:
-            scraper = HotelService()
-            await scraper.start(use_bright_data=False)
-            url = await scraper.search_hotels(destination, checkin_date, checkout_date, adults)
-            if not url:
-                raise Exception("Failed to get hotel URL")
-            print(f"Hotel URL: {url}")
-            return url
-
-        finally:
-            print("Closing connection...")
-            if "scraper" in locals():
-                await scraper.close()
-
-        return None
-
-    async def get_hotel_recommendations(self, hotels_data, context=None):
-        """Get comprehensive hotel advisor response based on scraped hotel data."""
-        context_str = f"\n### Additional Context:\n{context}" if context else ""
-
-        # Convert the hotels_data to a pretty-printed JSON string if it's a dict
-        # if isinstance(hotels_data, dict):
-        #     hotels_json = json.dumps(hotels_data, indent=2)
-        # else:
-        #     hotels_json = hotels_data
-
-        prompt = ENHANCED_HOTEL_ADVISOR_PROMPT.format(
-            hotels_data=hotels_data,
-            context=context_str
-        )
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
-        messages = [HumanMessage(content=prompt)]
-        print("Generating enhanced hotel advisor response...")
-        response_llm = await llm.ainvoke(messages)
-        advisor_response = response_llm.content.strip()
-
-        print("Enhanced hotel advisor response generated")
-        return advisor_response
-
-    async def get_hotels(self, destination: str, start_date: str, end_date: str, travelers: int) -> str:
-        """
-        A wrapper method to allow the supervisor to call get_flights with keyword arguments.
-        It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
-        """
+    async def get_hotels(self, destination: str, start_date: str, end_date: str, travelers: int, budget: float) -> str:
+        """Wrapper method for get_best_hotels"""
         extracted_details = {
             "destination": destination,
             "start_date": start_date,
             "end_date": end_date,
-            "travelers": travelers
+            "travelers": travelers,
+            "budget": budget
         }
         return await self.get_best_hotels(extracted_details)
 
-    async def get_best_hotels(self, extracted_details: Dict[str, Any]) -> str:
-        """
-        Query the Google Hotels website real time for hotel offers using the extracted trip details,
-        and use prompt engineering to generate a detailed plain language hotel summary message.
+    async def get_hotel_recommendations(self, hotels_data, checkin="", checkout="", context=None):
+        """Generate hotel recommendations using the LLM"""
+        try:
+            if not hotels_data:
+                return "No hotel data available to generate recommendations."
 
-        Args:
-            extracted_details: A dictionary containing keys such as 'destination', 'checkin_date','checkout_date','travelers'.
+            context_str = f"\n### Additional Context:\n{context}" if context else ""
+            
+            prompt = ENHANCED_HOTEL_ADVISOR_PROMPT_SERPAPI.format(
+                hotels_data=json.dumps(hotels_data, indent=2),
+                checkin=checkin,
+                checkout=checkout,
+                context=context_str
+            )
 
-        Returns:
-            A plain text string summarizing the hotel offers with exact details for each offer.
-        """
-        destination = extracted_details.get("destination", "")
-        start_date = extracted_details.get("start_date", "")
-        end_date = extracted_details.get("end_date", "")
-        adults = extracted_details.get("travelers", "1")
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
+            messages = [{"role": "user", "content": prompt}]
+            logging.info("Generating hotel recommendations...")
+            response = await llm.agenerate(messages=[messages])
+            return response.generations[0][0].text.strip()
 
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
-
-        # Format to desired output
-        formatted_start_date = start_date_obj.strftime("%B %d, %Y")
-        formatted_end_date = end_date_obj.strftime("%B %d, %Y")
-
-        url = await self.get_hotel_url(destination, formatted_start_date, formatted_end_date, adults)
-        hotel_data = await self.scrape_hotels(url)
-
-        if hotel_data:
-            hotel_res = await self.get_hotel_recommendations(self, hotel_data)
-            return hotel_res
-        else:
-            raise Exception("Failed to scrape hotel data")
+        except Exception as e:
+            logging.error(f"Error generating hotel recommendations: {str(e)}")
+            raise Exception(f"Failed to generate hotel recommendations: {str(e)}")
