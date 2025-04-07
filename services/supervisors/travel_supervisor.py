@@ -356,6 +356,12 @@ class TravelSupervisor:
         """Final node that completes the workflow"""
         logger.info(f"Travel planning completed for session {state['session_id']}")
 
+        logger.info(f"flight information: {state['flights']}")
+        logger.info(f"hotel information: {state['hotels']}")
+        logger.info(f"activities information: {state['activities']}")
+        logger.info(f"itinerary information: {state['itinerary']}")
+
+
         # Return the final state
         return {
             "itinerary": state["itinerary"],
@@ -363,6 +369,7 @@ class TravelSupervisor:
             "hotels": state["hotels"],
             "activities": state["activities"]
         }
+
 
     async def plan_trip(self, session_id: str, trip_details: TripDetails) -> Dict[str, Any]:
         """
