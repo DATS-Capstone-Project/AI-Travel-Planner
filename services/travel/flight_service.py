@@ -1,18 +1,16 @@
-# services/travel/flight_service.py
 
 import logging
 from typing import Dict, Any
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from playwright.async_api import async_playwright
-from browser_use import Agent, Browser, BrowserConfig
-from services.Prompts.FlightsPrompt import flight_scrape_task
-from dotenv import load_dotenv
-import os
 from datetime import datetime
-
-load_dotenv()
+from utils.flight_util import LLMAirportCodeAgent
+from config.settings import OPENAI_API_KEY, SERP_API_KEY
+from itertools import product
+import aiohttp
+import ssl
+import certifi
 
 logger = logging.getLogger(__name__)
 
@@ -22,39 +20,43 @@ You are an experienced travel advisor specializing in flight recommendations. Yo
 ### Your Response Format:
 You MUST follow this EXACT format for your response:
 
-1. Begin with a warm greeting acknowledging the traveler's trip
-2. Organize flights by direction (outbound/return) and time of day (morning/afternoon/evening)
-3. For EACH flight, include these EXACT details in this format:
-   ```
-   **[Airline Name]**
-   - **Departure:** [Time]
-   - **Arrival:** [Time]
-   - **Duration:** [Duration in hr min format]
-   - **Price:** [Price with currency symbol]
-   - **Stops:** [Nonstop or number of stops]
-   ```
-4. End with specific recommendations that reference the exact flight details (not generic labels)
+1. Begin with a warm greeting that acknowledges the traveler's upcoming trip.
+2. Organize the flight options into groups of flights by time of day (Morning, Afternoon, Evening) based on their departure times.
+3. For EACH flight option, provide the following details in the EXACT format:
+   - **Airline Name**
+     - **Price:** [Price with currency symbol]
+     - **Total Duration:** [Total duration in hr and min format]
+     - **Trip Type:** [Direct or Connecting]  
+       (If connecting, mention the number of stops.)
+     - For each flight segment (if the flight has multiple segments), include:
+         - **Segment [Segment Number]: [Flight Number] - [Airline Name] ([Travel Class])**
+             - **Departure:** [Departure Code] - [Departure Airport] at [Time]
+             - **Arrival:** [Arrival Code] - [Arrival Airport] at [Time]
+             - **Segment Duration:** [Duration]
+             - **Aircraft:** [Aircraft]
+             - **Legroom:** [Legroom details]
+             - **Delay Notice:** If the segment is often delayed (30+ minutes), include a warning note.
+             - **Features:** List key features if available.
+     - **Layovers:** If applicable, list each layover with its airport, name, and formatted duration.
+     - **Additional Information:** Include any extra details provided.
+4. End your response with personalized recommendations that reference specific flights by their actual airline names and departure times, offering targeted advice based on the flight details provided.
 
 ### CRITICAL INSTRUCTIONS:
-- You MUST ONLY use the EXACT flight data provided in the input
-- DO NOT invent or make up ANY flight information
-- DO NOT change airline names, times, prices, or any other details
-- If you see "IndiGo" in the data, use "IndiGo", NOT "Delta" or any other airline
-- Use PRECISELY the airlines, times, prices and details from the provided flight data
-- NEVER use labels like "Flight A", "Flight B", etc.
-- Group flights by time of day (Morning/Afternoon/Evening) based on departure times
-- Reference specific flights by their actual airline and departure time in recommendations
+- You MUST ONLY use the EXACT flight data provided in the input. DO NOT invent or alter any flight information.
+- Maintain precision with all details: airline names, times, prices, durations, and any additional flight attributes.
+- NEVER use generic labels like "Flight A" or "Flight B." Always reference the specific flight details.
+- Group flights accurately by the departure time of day.
+- Assume the flight data represents round-trip journeys;
+- If a flight is direct, clearly state it; if it is connecting, specify the number of stops and include segment details.
+- Include all additional details such as carbon emissions and extra features exactly as provided.
 
 ### Flight Data:
-#### Outbound Flights:
-{departing_flights}
-
-#### Return Flights:
-{returning_flights}
+#### Flight Options:
+{flight_options}
 
 {context}
 
-Remember to treat this as a real conversation where you're genuinely trying to help someone make the best choice for their travel needs, using ONLY the ACTUAL flight data provided above.
+Remember to treat this as a real conversation where you're genuinely helping the traveler choose the best flight options based solely on the provided data.
 """
 
 
@@ -65,162 +67,211 @@ class FlightService:
         """
         Initialize the Amadeus client and the LLM client using environment variables.
         """
-        self.llm = ChatOpenAI(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-3.5-turbo", temperature=0)
-
-    async def start(self):
-        self.playwright = await async_playwright().start()
+        self.flight_data = []
 
 
-        # Local browser configuration
-        self.browser = await self.playwright.chromium.launch(
-            headless=False,  # Set to True for headless mode
-        )
+    def _format_duration(self, minutes):
+        """Convert duration from minutes to hours and minutes format."""
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours}h {mins}m"
 
-        self.context = await self.browser.new_context()
-        self.page = await self.context.new_page()
+    def _format_datetime(self, datetime_str):
+        """Format datetime string to a more readable format."""
+        dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+        return dt.strftime("%a, %b %d, %I:%M %p")
 
-    async def fill_and_select_airport(self, input_selector, airport_name):
-        try:
-            if input_selector == 'input[aria-label="Where to? "]':
-                input_element = await self.page.wait_for_selector(input_selector)
-                await input_element.type(airport_name, delay=200)
-                await self.page.wait_for_selector(
-                    f'li[role="option"][aria-label*="{airport_name}"]', timeout=8000
-                )
-                await self.page.wait_for_timeout(500)
+    def _get_safe_value(self, dictionary, keys, default=None):
+        """Safely retrieve a value from a nested dictionary."""
+        if not isinstance(keys, list):
+            keys = [keys]
+
+        current = dictionary
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
             else:
-                input_element = await self.page.wait_for_selector(input_selector)
-                await self.page.evaluate('(el) => el.value = ""', input_element)
-                await input_element.type(airport_name, delay=200)
-                await self.page.wait_for_selector(
-                    f'li[role="option"][aria-label*="{airport_name}"]', timeout=8000
-                )
-                await self.page.wait_for_timeout(500)
+                return default
+        return current
+    def extract_flight_details(self):
+        """Extract and organize key details from the flight data."""
+        if not self.flight_data:
+            raise ValueError("No flight data loaded. Call load_flight_data() first.")
 
-            # Try different selectors for the dropdown item
-            dropdown_selectors = [
-                f'li[role="option"][aria-label*="{airport_name}"]',
+        flight_options = []
 
-                f'li[role="option"[aria-label*="Washington"]'
-                f'li[role="option"]',
-                f'li[role="option"] .zsRT0d:text-is("{airport_name}")',
-                f'.zsRT0d:has-text("{airport_name}")',
-            ]
+        for i, option in enumerate(self.flight_data, 1):
+            flight_segments = []
 
-            for selector in dropdown_selectors:
-                try:
-                    dropdown_item = await self.page.wait_for_selector(
-                        selector, timeout=8000
-                    )
-                    if dropdown_item:
-                        await dropdown_item.click()
-                        await self.page.wait_for_load_state("networkidle")
-                        return True
-                except:
-                    continue
+            # Process each flight segment
+            for flight in option.get("flights", []):
+                # Extract departure information
+                departure_airport = flight.get("departure_airport", {})
+                departure_name = self._get_safe_value(departure_airport, "name", "Unknown")
+                departure_id = self._get_safe_value(departure_airport, "id", "???")
+                departure_time = self._get_safe_value(departure_airport, "time")
 
-            raise Exception(f"Could not select airport: {airport_name}")
+                if departure_time:
+                    formatted_departure_time = self._format_datetime(departure_time)
+                else:
+                    formatted_departure_time = "Unknown"
 
-        except Exception as e:
-            print(f"Error filling airport: {str(e)}")
-            await self.page.screenshot(path=f"error_{airport_name.lower()}.png")
-            return False
+                # Extract arrival information
+                arrival_airport = flight.get("arrival_airport", {})
+                arrival_name = self._get_safe_value(arrival_airport, "name", "Unknown")
+                arrival_id = self._get_safe_value(arrival_airport, "id", "???")
+                arrival_time = self._get_safe_value(arrival_airport, "time")
 
-    async def fill_flight_search(self, origin, destination, start_date, travelers):
-        try:
-            print("Navigating to Google Flights...")
-            await self.page.goto("https://www.google.com/travel/flights")
+                if arrival_time:
+                    formatted_arrival_time = self._format_datetime(arrival_time)
+                else:
+                    formatted_arrival_time = "Unknown"
 
-            print("Filling in destination...")
-            if not await self.fill_and_select_airport(
-                    'input[aria-label="Where to? "]', destination
-            ):
-                raise Exception("Failed to set destination airport")
+                # Extract flight details
+                duration = self._get_safe_value(flight, "duration")
+                formatted_duration = self._format_duration(duration) if duration else "Unknown"
 
-            print("Filling in origin...")
-            if not await self.fill_and_select_airport(
-                    'input[aria-label="Where from?"]', origin
-            ):
-                raise Exception("Failed to set origin airport")
+                segment = {
+                    "airline": self._get_safe_value(flight, "airline", "Unknown"),
+                    "flight_number": self._get_safe_value(flight, "flight_number", "Unknown"),
+                    "departure": {
+                        "airport": departure_name,
+                        "code": departure_id,
+                        "time": formatted_departure_time,
+                        "raw_time": departure_time
+                    },
+                    "arrival": {
+                        "airport": arrival_name,
+                        "code": arrival_id,
+                        "time": formatted_arrival_time,
+                        "raw_time": arrival_time
+                    },
+                    "duration": formatted_duration,
+                    "duration_minutes": duration,
+                    "aircraft": self._get_safe_value(flight, "airplane", "Unknown"),
+                    "features": self._get_safe_value(flight, "extensions", []),
+                    "legroom": self._get_safe_value(flight, "legroom", "Unknown"),
+                    "often_delayed": self._get_safe_value(flight, "often_delayed_by_over_30_min", False),
+                    "travel_class": self._get_safe_value(flight, "travel_class", "Economy"),
+                    "airline_logo": self._get_safe_value(flight, "airline_logo", None)
+                }
+                flight_segments.append(segment)
 
-            print("Setting number of travelers...")
+            # Process layover information
+            layovers = []
+            for layover in option.get("layovers", []):
+                layover_info = {
+                    "name": self._get_safe_value(layover, "name", "Unknown"),
+                    "id": self._get_safe_value(layover, "id", "???"),
+                    "duration": self._get_safe_value(layover, "duration", 0),
+                    "formatted_duration": self._format_duration(self._get_safe_value(layover, "duration", 0))
+                }
+                layovers.append(layover_info)
 
-            # Click the travelers button
-            for i in range(int(travelers)):
-                try:
-                    await self.page.wait_for_selector('[aria-label="1 passenger"]', timeout=8000)
-                    await self.page.click('[aria-label="1 passenger"]')
-                    await self.page.wait_for_timeout(1000)
-                    await self.page.wait_for_selector('[aria-label="Add adult"]', timeout=8000)
-                    await self.page.click('[aria-label="Add adult"]')
-                    await self.page.wait_for_timeout(1000)
-                    done_button = await self.page.wait_for_selector(
-                        'button[class="VfPpkd-LgbsSe ksBjEc lKxP2d LQeN7 bRx3h sIWnMc"]', timeout=5000
-                    )
-                    await done_button.click()
-                except:
-                    continue
+            # Extract carbon emissions data
+            carbon_data = option.get("carbon_emissions", {})
+            if carbon_data:
+                carbon_info = {
+                    "this_flight": self._get_safe_value(carbon_data, "this_flight", 0),
+                    "typical_for_this_route": self._get_safe_value(carbon_data, "typical_for_this_route", 0),
+                    "difference_percent": self._get_safe_value(carbon_data, "difference_percent", 0),
+                    "formatted_emissions": f"{self._get_safe_value(carbon_data, 'this_flight', 0) / 1000:.1f} kg"
+                }
+            else:
+                carbon_info = {}
 
-            # Change the travelling type to "One Way"
-            await self.page.click('div[role="combobox"][aria-haspopup="listbox"]')
-            await self.page.wait_for_timeout(1000)
-            await self.page.click('li[data-value="2"]')
-            await self.page.wait_for_timeout(1000)
+            # Create flight option summary
+            total_duration = self._get_safe_value(option, "total_duration", 0)
+            flight_option = {
+                "option_number": i,
+                "price": f"${self._get_safe_value(option, 'price', 0)}",
+                "raw_price": self._get_safe_value(option, 'price', 0),
+                "total_duration": self._format_duration(total_duration) if total_duration else "Unknown",
+                "total_duration_minutes": total_duration,
+                "airline": self._get_safe_value(flight_segments[0], "airline",
+                                                "Unknown") if flight_segments else "Unknown",
+                "segments": flight_segments,
+                "layovers": layovers,
+                "carbon_emissions": carbon_info,
+                "extensions": self._get_safe_value(option, "extensions", []),
+                "trip_type": self._get_safe_value(option, "type", "One way"),
+                "airline_logo": self._get_safe_value(option, "airline_logo", None),
+                "departure_token": self._get_safe_value(option, "departure_token", None)
+            }
 
+            flight_options.append(flight_option)
 
-            print("Selecting dates...")
-            # Click the departure date button
-            await self.page.click('input[aria-label*="Departure"]')
-            await self.page.wait_for_timeout(1000)
+        return flight_options
 
-            # Select departure date
-            departure_button = await self.page.wait_for_selector(
-                f'div[aria-label*="{start_date}"]', timeout=12000
-            )
-            await departure_button.click()
-            await self.page.wait_for_timeout(1000)
+    def create_structured_summary(self, flight_options=None):
+        """Create a structured summary of flight options without using the AI model."""
+        if flight_options is None:
+            flight_options = self.extract_flight_details()
 
-            # Click Done button if it exists
-            try:
-                done_button = await self.page.wait_for_selector(
-                    'button[aria-label*="Done."]', timeout=5000
-                )
-                await done_button.click()
-            except:
-                print("No Done button found, continuing...")
+        summaries = []
 
-            return self.page.url
+        for option in flight_options:
+            summary = f"Option {option['option_number']}: {option['airline']}\n"
+            summary += f"Price: {option['price']}\n"
+            summary += f"Duration: {option['total_duration']}\n"
+            summary += f"Trip Type: {option['trip_type']}\n"
 
+            # Direct vs. connecting flight
+            if len(option['segments']) == 1:
+                summary += "Direct Flight\n"
+            else:
+                summary += f"Connecting Flight with {len(option['segments']) - 1} layover(s)\n"
 
-        except Exception as e:
-            print(f"An error occurred: {str(e)}")
-            return None
+            # Segment details
+            for i, segment in enumerate(option['segments'], 1):
+                if len(option['segments']) > 1:
+                    summary += f"\nSegment {i}: "
 
-    async def close(self):
-        try:
-            await self.context.close()
-            await self.browser.close()
-            await self.playwright.stop()
-        except Exception as e:
-            print(f"Error during cleanup: {str(e)}")
+                summary += f"{segment['flight_number']} - {segment['airline']} ({segment['travel_class']})\n"
+                summary += f"  Depart: {segment['departure']['code']} - {segment['departure']['airport']} ({segment['departure']['time']})\n"
+                summary += f"  Arrive: {segment['arrival']['code']} - {segment['arrival']['airport']} ({segment['arrival']['time']})\n"
+                summary += f"  Duration: {segment['duration']}\n"
+                summary += f"  Aircraft: {segment['aircraft']}\n"
+                summary += f"  Legroom: {segment['legroom']}\n"
 
-    async def get_flight_url(self, origin, destination, start_date, travelers):
-        try:
-            scraper = FlightService()
-            await scraper.start()
-            url = await scraper.fill_flight_search(
-                origin=origin,
-                destination=destination,
-                start_date=start_date,
-                travelers=travelers,
-            )
-            return url
-        finally:
-            print("Closing connection...")
-            if "scraper" in locals():
-                await scraper.close()
-        return None
+                if segment['often_delayed']:
+                    summary += "  ⚠️ Often delayed by 30+ minutes\n"
 
+                # Key features
+                if segment['features']:
+                    key_features = segment['features']
+                    if key_features:
+                        summary += "  Features: " + "\n    • " + "\n    • ".join(key_features) + "\n"
+
+            # Layover information
+            if option['layovers']:
+                summary += "\nLayovers:\n"
+                for layover in option['layovers']:
+                    summary += f"  {layover['name']} ({layover['id']}): {layover['formatted_duration']}\n"
+
+            # Carbon emissions
+            if option['carbon_emissions']:
+                emission_info = option['carbon_emissions']
+                comparison = ""
+                if 'difference_percent' in emission_info:
+                    diff = emission_info['difference_percent']
+                    if diff < 0:
+                        comparison = f" ({abs(diff)}% below average)"
+                    else:
+                        comparison = f" ({diff}% above average)"
+
+                if 'formatted_emissions' in emission_info:
+                    summary += f"\nCarbon Emissions: {emission_info['formatted_emissions']}{comparison}\n"
+
+            # Additional information
+            if option['extensions']:
+                summary += "\nAdditional Information:\n"
+                for ext in option['extensions']:
+                    summary += f"  • {ext}\n"
+
+            summaries.append(summary)
+
+        return summaries
     async def get_best_flight(self, extracted_details: Dict[str, Any]) -> str:
         """
         Query the Google Flight website real time for flight offers using the extracted trip details,
@@ -239,65 +290,86 @@ class FlightService:
         end_date = extracted_details.get("end_date", "")
         travelers = extracted_details.get("travelers", 1)
 
-        # Get the flight search URL
-        departing_flight_url = await self.get_flight_url(origin, destination, start_date, travelers)
-        returning_flight_url = await self.get_flight_url(destination, origin, end_date, travelers)
+        await self.load_flight_data(origin, destination, start_date, end_date, travelers)
 
-        if not departing_flight_url and not returning_flight_url:
-            logger.error("Failed to retrieve flight search URL.")
-            return "Unable to find flight offers at this time."
+        # Extract flight details
+        flight_options = self.extract_flight_details()
 
-        departing_flight_result = await self.scrape_flights(departing_flight_url)
-        returning_flight_result = await self.scrape_flights(returning_flight_url)
+        # Generate structured summaries
+        structured_summaries = self.create_structured_summary(flight_options)
 
-        logger.info(f"Processed flight offers JSON: {departing_flight_result, returning_flight_result}")
-
-        flight_res = await self.get_flight_advisor_response(departing_flight_result, returning_flight_result)
+        flight_res = await self.get_flight_advisor_response(structured_summaries)
 
         return flight_res
 
-
-    async def get_flight_advisor_response(self,departing_flights, returning_flights, context=None):
-
+    async def get_flight_advisor_response(self, flight_options, context=None):
         """Get flight advisor response based on scraped flight data."""
         context_str = f"\n### Additional Context:\n{context}" if context else ""
 
         prompt = FLIGHT_ADVISOR_PROMPT.format(
-            departing_flights=departing_flights,
-            returning_flights=returning_flights,
+            flight_options=flight_options,
             context=context_str
         )
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
         messages = [HumanMessage(content=prompt)]
         print("Generating flight advisor response...")
         response_llm = await llm.ainvoke(messages)
         advisor_response = response_llm.content.strip()
 
-
         print("Flight advisor response generated")
         return advisor_response
 
-    async def scrape_flights(self, url):
-        browser = Browser(
-            config=BrowserConfig(
-                headless=False
-            )
-        )
-        initial_actions = [
-            {"open_tab": {"url": url}},
-        ]
+    async def load_flight_data(self, origin, destination, start_date, end_date, travelers):
+        """
+        Load flight data from multiple sources: file, JSON string, or API.
 
-        agent = Agent(
-            task=flight_scrape_task(url),
-            llm=ChatOpenAI(model="gpt-4o-mini"),
-            initial_actions=initial_actions,
-            browser=browser,
-        )
+        Returns:
+            list: Loaded flight data
+        """
+        # Define your lists of departure and arrival IDs.
+        departure_ids = origin
+        arrival_ids = destination
 
-        history = await agent.run()
-        await browser.close()
-        result = history.final_result()
-        return result
+        # Base parameters that remain constant for all API calls.
+        base_params = {
+            "engine": "google_flights",
+            "outbound_date": start_date,
+            "return_date": end_date,
+            "currency": "USD",
+            "adults": travelers,
+            "hl": "en",
+            "deep_search": "true",
+            "api_key": SERP_API_KEY
+        }
+
+        # Initialize an empty list to collect flight data.
+        all_flights = []
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+        async with aiohttp.ClientSession() as session:
+            # Iterate over every combination of departure and arrival.
+            for dep, arr in product(departure_ids, arrival_ids):
+                # Create a new parameters dictionary for each request.
+                params = base_params.copy()
+                params["departure_id"] = dep
+                params["arrival_id"] = arr
+
+                # Make the API request.
+                async with session.get('https://serpapi.com/search', params=params, ssl=ssl_context) as resp:
+                    if resp.status == 200:
+                        response = await resp.json()
+                        # Check for "best_flights" first; otherwise, use "other_flights".
+                        if "best_flights" in response:
+                            all_flights.extend(response["best_flights"])
+                        elif "other_flights" in response:
+                            all_flights.extend(response["other_flights"])
+                    else:
+                        # Log an error or handle failure as needed.
+                        logger.error(f"Failed to load flights for dep: {dep}, arr: {arr}. HTTP Status: {resp.status}")
+
+        # Optionally assign to a class attribute if inside a class.
+        self.flight_data = all_flights
+        return self.flight_data
 
     async def get_flights(self, origin: str, destination: str, start_date: str, end_date: str,
                           travelers: int) -> str:
@@ -306,15 +378,18 @@ class FlightService:
         It builds an extracted_details dictionary and calls the underlying get_best_flight logic.
         """
 
+        Origin_airport_codes = LLMAirportCodeAgent().get_airport_info(city_name=origin)
+        Destination_airport_codes = LLMAirportCodeAgent().get_airport_info(city_name=destination)
+
         extracted_details = {
-            "origin": origin,
-            "destination": destination,
-            "start_date": self.format_date(start_date),
-            "end_date": self.format_date(end_date),
+            "origin": Origin_airport_codes['airport_codes'],
+            "destination": Destination_airport_codes['airport_codes'],
+            "start_date": start_date,
+            "end_date": end_date,
             "travelers": travelers
         }
         return await self.get_best_flight(extracted_details)
 
     def format_date(self, date_str):
         date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        return f"{date_obj.strftime('%B')} {date_obj.day}, {date_obj.year}"
+        return f"{date_obj.strftime('%Y')} {date_obj.day}, {date_obj.year}"
