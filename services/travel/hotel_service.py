@@ -6,6 +6,7 @@ from typing import Dict, Any
 import logging
 import os
 import json
+from config.settings import SERP_API_KEY, OPENAI_API_KEY
 
 load_dotenv()
 
@@ -89,7 +90,7 @@ Category Name:
 
 class HotelService:
     def __init__(self):
-        self.serpapi_key = os.getenv("SERPAPI_KEY")
+        self.serpapi_key = SERP_API_KEY
         if not self.serpapi_key:
             raise ValueError("SERPAPI_KEY environment variable is not set")
         
@@ -336,7 +337,7 @@ class HotelService:
                 context=context_str
             )
 
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
             messages = [{"role": "user", "content": prompt}]
             logging.info("Generating hotel recommendations...")
             response = await llm.agenerate(messages=[messages])

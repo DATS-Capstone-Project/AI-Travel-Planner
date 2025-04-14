@@ -8,6 +8,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EXTRACTION_MODEL = "gpt-3.5-turbo-0125"  # Faster model for entity extraction
 CONVERSATION_MODEL = "gpt-3.5-turbo-0125"  # Model for the assistant
+SERP_API_KEY = os.getenv("SERP_API_KEY")
 
 # Travel planning settings
 MAX_FUTURE_DAYS = 180  # Maximum days in future for booking (6 months)
