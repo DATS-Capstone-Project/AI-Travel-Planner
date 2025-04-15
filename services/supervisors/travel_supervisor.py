@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 from typing import TypedDict, Dict, Any, List
@@ -240,7 +239,8 @@ class TravelSupervisor:
         """Create a comprehensive itinerary from all collected data"""
         trip_details = state["trip_details"]
         flights = state["flights"]
-        hotels = state["hotels"]
+        # Use selected hotel from trip details if available, otherwise use hotels from parallel search
+        hotels = trip_details.get("selected_hotel", state["hotels"])
         activities = state["activities"]
 
         print("Trip details:", trip_details)
@@ -261,7 +261,7 @@ class TravelSupervisor:
                 FLIGHT OPTIONS:
                 {flights}
 
-                HOTEL OPTIONS:
+                HOTEL DETAILS:
                 {hotels}
                  Present hotels exactly as provided, maintaining all details and formatting. Only show available categories (Budget-Friendly/Mid-Range/Luxury).
 
@@ -306,44 +306,40 @@ class TravelSupervisor:
                 RECOMMENDED ACTIVITIES:
                 {activities}
 
-                IMPORTANT INSTRUCTIONS:
-
-                1. Begin with a warm, personalized greeting acknowledging their specific trip
-
-                2. For the Flight Options section:
-                   - MAINTAIN THE EXACT FLIGHT INFORMATION FORMAT from the input
-                   - Keep all flight details intact (airline, departure/arrival times, duration, price, stops)
-                   - DO NOT summarize or modify the flight information
-                   - DO NOT use labels like "Flight A", "Flight B", etc.
-                   - Preserve the grouping by time of day (Morning/Afternoon/Evening)
-                   - When recommending flights, refer to them by their actual details (e.g., "the IndiGo flight at 11:25 AM")
-
-                3. For the Hotel Options section:
-                   - MAINTAIN THE EXACT HOTEL INFORMATION FORMAT from the input
-                   - Keep all hotel details intact (name, rating, price, location, amenities)
-                   - DO NOT summarize or modify the hotel information
-                   - DO NOT use generic labels like "Hotel A", "Hotel B", etc.
-                   - Organize hotels logically by price category (Budget-Friendly, Mid-Range, Luxury)
-                   - When recommending hotels, refer to them by their actual names and details (e.g., "the Hyatt Centric at $111 with beach access")
-                   - If hotel details provided are NULL or INSUFFICIENT, present options with your best knowledge, including FULL DETAILS for hotel name, price range, location, amenities, and target travelers
-
-                4. For the Activities section:
-                   - Present recommended activities with full details as provided
-                   - Organize logically by day or category
-                   - Make specific suggestions that complement the selected hotels and overall trip experience
-                   - For each activity, include approximate time requirements and any practical tips
-
-                5. Include a Budget Breakdown section showing estimated total costs for:
-                   - Flights
-                   - Accommodation
-                   - Activities
-                   - Meals and incidentals
-                   - Transportation
-
-                6. End with a friendly closing that offers continued assistance
-
-                ESSENTIAL: Both the flight and hotel sections MUST maintain the identical format as provided in the input, with all details preserved exactly as given.
-                """)
+                Create a comprehensive day-by-day itinerary that includes:
+                1. All days from check-in to check-out
+                2. Flight arrival and departure times
+                3. Hotel check-in and check-out times
+                4. Daily activities with timing
+                5. Meal recommendations
+                6. Transportation details
+                7. Important tips and notes
+                
+                Format each day as:
+                
+                DAY X - [Day of Week, Date]
+                
+                Morning:
+                - Activities with times
+                - Transportation details
+                - Meal suggestions
+                
+                Afternoon:
+                - Activities with times
+                - Transportation details
+                - Meal suggestions
+                
+                Evening:
+                - Activities with times
+                - Transportation details
+                - Meal suggestions
+                
+                Daily Tips:
+                - Weather considerations
+                - What to bring
+                - Local customs
+                - Money-saving tips
+            """)
         ]
 
         response = await self.model.ainvoke(messages)
