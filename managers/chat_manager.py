@@ -13,6 +13,7 @@ from services.travel.flight_service import FlightService
 from services.travel.hotel_service import HotelService
 from services.supervisors.travel_supervisor import TravelSupervisor
 from models.trip_details import TripDetails
+from services.customizers.customizer_agent import CustomizerAgent
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -42,12 +43,13 @@ class ChatManager:
         self.extractor = ExtractorFactory.create_extractor(extractor_type)
         self.model = model
 
-        # Initialize the supervisor
+        # Initialize the supervisor and customizer
         self.travel_supervisor = TravelSupervisor(
             flight_service=flight_service,
             hotel_service=hotel_service,
             activity_service=activity_service
         )
+        self.customizer_agent = CustomizerAgent(hotel_service=hotel_service)
 
         self.system_prompt = """
             You are a helpful travel planning assistant. 
@@ -73,6 +75,13 @@ class ChatManager:
 
             3. PLANNING PHASE:
               - After user confirms, proceed with planning the itinerary
+            4. FOLLOW-UP PHASE:
+                - If the user asks for changes or has follow-up questions, handle them accordingly
+                -If the user asks for hotel customization, handle it separately
+                - If the user asks for a day-by-day itinerary, generate it with the customized hotels, flights, and activities
+                
+            
+            
 
             CRITICAL: Always check what information you already have before asking questions.
             This ensures a much better user experience.
@@ -84,6 +93,23 @@ class ChatManager:
         """
         logger.info(f"Processing message for session {session_id}")
         logger.info(f"User message: {message}")
+
+        # Check if this is an itinerary generation request
+        itinerary_keywords = ["create itinerary", "make itinerary", "plan my days", "day by day plan"]
+        if any(keyword in message.lower() for keyword in itinerary_keywords):
+            trip_details = self.session_repository.get_trip_details(session_id)
+            if not trip_details.get("selected_hotel"):
+                return {
+                    "response": "Please select a hotel first before I create your itinerary. Would you like to see hotel options?",
+                    "extracted_data": trip_details.to_dict()
+                }
+            return await self._generate_itinerary(session_id, trip_details)
+
+        # Check if this is a hotel customization request
+        hotel_keywords = ["customize hotel", "change hotel", "different hotel", "hotel preference", 
+                         "hotel option", "hotel amenities", "hotel location", "hotel price"]
+        if any(keyword in message.lower() for keyword in hotel_keywords):
+            return await self.handle_hotel_customization(session_id, message)
 
         # Get trip details
         existing_trip_details = self.session_repository.get_trip_details(session_id)
@@ -287,24 +313,102 @@ class ChatManager:
 
         # Create a prompt for the follow-up
         prompt = f"""
-        You are a travel planning assistant. You previously generated an itinerary for a trip with these details:
+        You are an expert travel planning assistant with deep knowledge of destinations worldwide. You previously generated an itinerary for a trip with these details:
 
-        Origin: {trip_details.origin}
-        Destination: {trip_details.destination}
-        Start Date: {trip_details.start_date}
-        End Date: {trip_details.end_date}
-        Number of Travelers: {trip_details.travelers}
-        Budget: ${trip_details.budget if trip_details.budget else 'Not specified'}
+        Trip Details:
+        - Origin: {trip_details.origin}
+        - Destination: {trip_details.destination}
+        - Start Date: {trip_details.start_date}
+        - End Date: {trip_details.end_date}
+        - Number of Travelers: {trip_details.travelers}
+        - Budget: ${trip_details.budget if trip_details.budget else 'Not specified'}
+        - Preferences: {trip_details.preferences if trip_details.preferences else 'Not specified'}
 
-        The previously generated itinerary is below:
-
+        Previous Itinerary:
         {itinerary}
 
         The user is now asking: "{message}"
 
-        Please address their question or request specifically, maintaining the same level of detail and helpfulness.
-        If they ask for a day-by-day breakdown, create a detailed daily schedule based on the information in the itinerary.
-        If they want to modify aspects of the itinerary, suggest appropriate changes.
+        If they're requesting a day-by-day breakdown, create a detailed daily itinerary following these guidelines:
+        1. Use the following format for each day for the number of days in the trip:
+        2. Include a detailed itinerary for each day, including morning, afternoon, and evening activities.
+        3. For the first day,the itenary should start from whatever time the user arrives at the destination. Based on the flight selected.
+        4. For the last day, the itinerary should end at the time of check-out from the hotel and based on the user's return flight.
+        
+        1. FORMAT FOR EACH DAY:
+        ```
+        DAY X - [Day of Week, Date]
+        
+        Morning (Time slots with specific hours):
+        - [Activity/Location] (Duration)
+          • Description and highlights
+          • Practical tips (opening hours, tickets needed, etc.)
+          • Transportation method and time
+          • Estimated costs
+        
+        Afternoon:
+        [Same structure as morning]
+        
+        Evening:
+        [Same structure as morning]
+        
+        Meals:
+        • Breakfast: [Suggestion with cuisine type and price range]
+        • Lunch: [Suggestion with cuisine type and price range]
+        • Dinner: [Suggestion with cuisine type and price range]
+        
+        Daily Tips:
+        • Weather considerations
+        • What to bring
+        • Local customs or etiquette
+        • Money-saving tips
+        ```
+
+        2. IMPORTANT CONSIDERATIONS:
+        - Prioritize user preferences and budget
+        - Include a mix of activities (cultural, leisure, adventure)
+        - Give Detail itenary for each day of the trip starting from check-in to check-out
+        -include flight details if applicable and hotel check-in/check-out times
+        
+        - Account for travel time between activities
+        - Consider opening hours of attractions
+        - Balance the schedule (not too packed or too light)
+        - Include meal times at logical intervals
+        - Factor in rest periods for longer trips
+        - Account for jet lag on first day
+        - Consider local customs and siesta times if applicable
+        - Include alternative indoor activities for bad weather
+        - Suggest photo opportunities and best times
+        
+        3. PRACTICAL DETAILS:
+        - Include specific meeting points
+        - Mention booking requirements
+        - Add estimated costs for activities
+        - Specify transportation methods
+        - Note important phone numbers or websites
+        - Include local emergency contacts
+        
+        4. LOCAL INSIGHTS:
+        - Best times to visit attractions
+        - Local festivals or events during stay
+        - Hidden gems and local favorites
+        - Cultural etiquette tips
+        - Safety considerations
+        
+        5. FLEXIBILITY:
+        - Suggest alternative activities
+        - Provide rainy day options
+        - Include free time for spontaneous exploration
+        - Note which activities need advance booking
+
+        If they want to modify aspects of the itinerary:
+        1. Understand their specific modification request
+        2. Suggest appropriate changes while maintaining the flow
+        3. Consider impact on other activities
+        4. Provide alternatives if original suggestions aren't suitable
+        5. Explain reasoning for suggested modifications
+
+        Maintain a friendly, conversational tone while providing detailed, practical information. Focus on creating a balanced, enjoyable experience that matches their preferences and travel style.
         """
 
         # Call the Chat Completions API
@@ -334,4 +438,61 @@ class ChatManager:
             return {
                 "response": "I'm sorry, but I encountered an error while processing your question. Could you please try again?",
                 "extracted_data": trip_details.to_dict()
+            }
+
+    async def handle_hotel_customization(self, session_id: str, message: str) -> Dict[str, Any]:
+        """Handle hotel customization requests from users"""
+        logger.info(f"Processing hotel customization request for session {session_id}")
+        
+        try:
+            # Get current trip details
+            trip_details = self.session_repository.get_trip_details(session_id)
+            
+            # Prepare state for customization
+            state = {
+                "session_id": session_id,
+                "trip_details": trip_details.to_dict(),
+                "message": message
+            }
+            
+            # Process the customization request
+            result = await self.customizer_agent.customize_trip(state, "hotel")
+            
+            if result["status"] == "success":
+                # If we have a selected hotel, update trip details
+                if "selected_hotel" in result:
+                    updated_trip_details = {
+                        **trip_details.to_dict(),
+                        "selected_hotel": result["selected_hotel"]
+                    }
+                    self.session_repository.update_trip_details(session_id, updated_trip_details)
+                    trip_details = self.session_repository.get_trip_details(session_id)
+
+                # If customization requires new itinerary, generate it
+                if result.get("needs_new_itinerary", False):
+                    # Update trip details if needed
+                    if "trip_details" in result:
+                        self.session_repository.update_trip_details(session_id, result["trip_details"])
+                        trip_details = self.session_repository.get_trip_details(session_id)
+                    
+                    # Generate new itinerary
+                    new_itinerary = await self._generate_itinerary(session_id, trip_details)
+                    return new_itinerary
+                
+                # If no new itinerary needed, return the customization response
+                return {
+                    "response": result["message"],
+                    "extracted_data": trip_details.to_dict()
+                }
+            else:
+                return {
+                    "response": result["message"],
+                    "extracted_data": trip_details.to_dict()
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in hotel customization: {str(e)}")
+            return {
+                "response": "I encountered an error while customizing your hotel preferences. Please try again.",
+                "extracted_data": trip_details.to_dict() if 'trip_details' in locals() else {}
             }

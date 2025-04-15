@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 from serpapi import GoogleSearch
 from langchain_openai import ChatOpenAI
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 import logging
 import os
 import json
@@ -93,7 +93,29 @@ class HotelService:
         self.serpapi_key = SERP_API_KEY
         if not self.serpapi_key:
             raise ValueError("SERPAPI_KEY environment variable is not set")
+        # Dictionary to store hotel options for each session
+        self._session_hotels = {}
         
+    def _store_hotels_for_session(self, session_id: str, hotels: List[Dict[str, Any]]):
+        """Store hotels for a specific session"""
+        self._session_hotels[session_id] = {
+            'hotels': hotels,
+            'timestamp': datetime.now()
+        }
+    
+    def _get_stored_hotels(self, session_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Get stored hotels for a session"""
+        session_data = self._session_hotels.get(session_id)
+        if not session_data:
+            return None
+            
+        # Check if the data is less than 30 minutes old
+        if (datetime.now() - session_data['timestamp']).total_seconds() > 1800:
+            del self._session_hotels[session_id]
+            return None
+            
+        return session_data['hotels']
+
     async def calculate_hotel_budget(self, total_budget: float, num_days: int) -> Dict[str, float]:
         """Calculate hotel budget ranges based on total trip budget"""
         try:
@@ -346,3 +368,175 @@ class HotelService:
         except Exception as e:
             logging.error(f"Error generating hotel recommendations: {str(e)}")
             raise Exception(f"Failed to generate hotel recommendations: {str(e)}")
+
+    def _filter_hotels_by_price(self, hotels: List[Dict[str, Any]], price_preference: str, total_budget: float) -> List[Dict[str, Any]]:
+        """Filter hotels based on price preference"""
+        try:
+            filtered_hotels = []
+            for hotel in hotels:
+                price_str = str(hotel["price_per_night"]).replace("$", "").replace(",", "")
+                if not price_str.replace(".", "").isdigit():
+                    continue
+                    
+                price = float(price_str)
+                
+                if price_preference == "lower":
+                    if price <= total_budget * 0.7:  # 30% cheaper than budget
+                        filtered_hotels.append(hotel)
+                elif price_preference == "higher":
+                    if price >= total_budget * 0.8:  # Using 80% of higher budget
+                        filtered_hotels.append(hotel)
+                else:
+                    filtered_hotels.append(hotel)
+                    
+            return filtered_hotels
+        except Exception as e:
+            logging.error(f"Error filtering hotels by price: {str(e)}")
+            return hotels
+
+    def _filter_hotels_by_amenities(self, hotels: List[Dict[str, Any]], required_amenities: set) -> List[Dict[str, Any]]:
+        """Filter hotels based on required amenities"""
+        if not required_amenities:
+            return hotels
+            
+        return [
+            hotel for hotel in hotels
+            if all(amenity in [a.lower() for a in hotel.get("amenities", [])]
+                  for amenity in required_amenities)
+        ]
+
+    def _filter_hotels_by_location(self, hotels: List[Dict[str, Any]], location_preference: str) -> List[Dict[str, Any]]:
+        """Filter hotels based on location preference"""
+        if not location_preference:
+            return hotels
+            
+        filtered_hotels = []
+        for hotel in hotels:
+            address = hotel["location"]["address"].lower()
+            if location_preference == "city_center":
+                if any(term in address for term in ["center", "centre", "downtown", "central"]):
+                    filtered_hotels.append(hotel)
+            elif location_preference == "beach":
+                if any(term in address for term in ["beach", "coast", "oceanfront", "sea"]):
+                    filtered_hotels.append(hotel)
+            else:
+                filtered_hotels.append(hotel)
+                
+        return filtered_hotels
+
+    async def get_alternative_hotels(self, session_id: str, destination: str, checkin_date: str,
+                                  checkout_date: str, adults: int, total_budget: float,
+                                  preferences: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get alternative hotels based on user preferences"""
+        try:
+            logging.info(f"Finding alternative hotels for {destination} with preferences: {preferences}")
+
+            # Try to get stored hotels first
+            hotels = self._get_stored_hotels(session_id)
+            
+            # If no stored hotels or they're expired, fetch new ones
+            if not hotels:
+                logging.info("No stored hotels found, fetching from API...")
+                hotels = await self.get_hotel_results_from_serpapi(
+                    destination=destination,
+                    checkin_date=checkin_date,
+                    checkout_date=checkout_date,
+                    adults=adults,
+                    total_budget=total_budget
+                )
+                if not hotels:
+                    return []
+                self._store_hotels_for_session(session_id, hotels)
+
+            # Apply filters based on preferences
+            filtered_hotels = hotels.copy()  # Create a copy to avoid modifying original list
+
+            # Apply price filter
+            if preferences.get("price_preference"):
+                filtered_hotels = self._filter_hotels_by_price(
+                    filtered_hotels, 
+                    preferences["price_preference"], 
+                    total_budget
+                )
+
+            # Apply location filter
+            if preferences.get("location_preference"):
+                filtered_hotels = self._filter_hotels_by_location(
+                    filtered_hotels,
+                    preferences["location_preference"]
+                )
+
+            # Apply amenities filter
+            if preferences.get("amenities"):
+                filtered_hotels = self._filter_hotels_by_amenities(
+                    filtered_hotels,
+                    set(preferences["amenities"])
+                )
+
+            # If we have too few results after filtering, try fetching new hotels with adjusted parameters
+            if len(filtered_hotels) < 3:
+                logging.info("Too few results after filtering, fetching new hotels...")
+                # Modify search parameters based on preferences
+                params = {
+                    "destination": destination,
+                    "checkin_date": checkin_date,
+                    "checkout_date": checkout_date,
+                    "adults": adults,
+                    "total_budget": total_budget
+                }
+
+                # Adjust parameters based on preferences
+                if preferences.get("price_preference") == "lower":
+                    params["total_budget"] = total_budget * 0.7
+                elif preferences.get("price_preference") == "higher":
+                    params["total_budget"] = total_budget * 1.3
+
+                if preferences.get("location_preference") == "city_center":
+                    params["destination"] = f"{destination} city center"
+                elif preferences.get("location_preference") == "beach":
+                    params["destination"] = f"{destination} beach"
+
+                # Get new hotels from SerpAPI
+                new_hotels = await self.get_hotel_results_from_serpapi(**params)
+                if new_hotels:
+                    # Apply amenities filter to new hotels if needed
+                    if preferences.get("amenities"):
+                        new_hotels = self._filter_hotels_by_amenities(
+                            new_hotels,
+                            set(preferences["amenities"])
+                        )
+                    # Store and return new hotels
+                    self._store_hotels_for_session(session_id, new_hotels)
+                    return new_hotels
+
+            return filtered_hotels
+
+        except Exception as e:
+            logging.error(f"Error getting alternative hotels: {str(e)}")
+            return []
+
+    def get_hotel_by_name(self, session_id: str, hotel_name: str) -> Optional[Dict[str, Any]]:
+        """Get hotel details by name from the stored options"""
+        try:
+            # Get stored hotels for this session
+            hotels = self._get_stored_hotels(session_id)
+            if not hotels:
+                logging.warning(f"No stored hotels found for session {session_id}")
+                return None
+
+            # Try to find the hotel by exact name match first
+            for hotel in hotels:
+                if hotel["name"].lower() == hotel_name.lower():
+                    return hotel
+
+            # If no exact match, try fuzzy matching
+            for hotel in hotels:
+                if hotel_name.lower() in hotel["name"].lower():
+                    return hotel
+
+            logging.warning(f"Hotel '{hotel_name}' not found in stored options for session {session_id}")
+            return None
+
+        except Exception as e:
+            logging.error(f"Error getting hotel by name: {str(e)}")
+            return None
