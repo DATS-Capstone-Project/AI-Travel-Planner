@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 from typing import TypedDict, Dict, Any, List
@@ -234,19 +233,25 @@ class TravelSupervisor:
 
         return state
 
+
+
     async def _create_itinerary(self, state: TravelState) -> Dict[str, Any]:
         """Create a comprehensive itinerary from all collected data"""
         trip_details = state["trip_details"]
         flights = state["flights"]
-        hotels = state["hotels"]
+        # Use selected hotel from trip details if available, otherwise use hotels from parallel search
+        hotels = trip_details.get("selected_hotel", state["hotels"])
         activities = state["activities"]
+
+        print("Trip details:", trip_details)
+        print("Flights:", flights)
+        print("Hotels:", hotels)
+        print("Activities:", activities)
 
         # Use LLM to create a well-formatted itinerary
         messages = [
             HumanMessage(content=f"""
                 You are an experienced travel consultant creating a personalized travel plan. Write in a friendly, conversational tone as if you're directly advising the traveler.
-
-                IMPORTANT: The following data contains pre-formatted information from specialized travel services. Maintain the detailed information while creating a cohesive travel plan.
 
                 Based on the following information, create a detailed travel plan:
 
@@ -256,88 +261,89 @@ class TravelSupervisor:
                 FLIGHT OPTIONS:
                 {flights}
 
-                HOTEL OPTIONS:
+                HOTEL DETAILS:
                 {hotels}
+                 Present hotels exactly as provided, maintaining all details and formatting. Only show available categories (Budget-Friendly/Mid-Range/Luxury).
 
-                ACTIVITIES INFORMATION:
+            For each hotel:
+            ```
+            **[Hotel Name]**
+            - Rating and reviews
+            - Price per night and total price
+            - Location details
+            - Property description
+            - Key amenities
+            - Perfect for (target travelers)
+            - Nearby attractions
+            - Special tips
+            ```
+
+            After each category, provide a COMPARATIVE ANALYSIS of:
+            - Price-to-value comparison
+            - Location advantages/disadvantages
+            - Amenity differences
+            - Best suited traveler types
+         
+             BUDGET BREAKDOWN
+            Provide a detailed budget breakdown:
+            - Flights
+            - Accommodation
+            - Activities
+            - Meals and incidentals
+            - Transportation
+            - Total estimated cost
+            
+            
+            FINAL RECOMMENDATIONS
+            Provide a "BEST MATCH" recommendation including:
+            - Best flight option with reasoning
+            - Best hotel option with reasoning
+            - Must-do activities
+            - Money-saving tips
+            - Practical travel tips
+
+
+                RECOMMENDED ACTIVITIES:
                 {activities}
 
-                FORMATTING INSTRUCTIONS:
-                - Use proper markdown formatting with headers (##, ###) for each section
-                - Include blank lines between paragraphs and sections (use double line breaks)
-                - Use bullet points (- ) for lists
-                - Ensure there are no unnecessary line breaks within paragraphs
-                - Use proper indentation for readability
-                - For tables, use markdown table format with proper spacing
-                - Preserve exact formatting of flight details, hotel names, prices, and other key information
-
-                GUIDANCE FOR CREATING THE TRAVEL PLAN:
-
-                1. START WITH A PERSONALIZED GREETING:
-                   - Begin with a warm, personalized welcome that acknowledges their specific trip details
-                   - Express enthusiasm about their Denver trip and set the tone for the detailed plan to follow
-                   - Briefly highlight what makes Denver special during their travel dates
-
-                2. PRESENT FLIGHT RECOMMENDATIONS:
-                   - Preserve the detailed flight information exactly as provided
-                   - Present the best flight options for both outbound and return journey
-                   - Highlight key benefits of each recommended flight (timing, amenities, price)
-                   - If flights are organized by time of day, maintain this structure
-                   - Ensure each flight option is clearly separated with blank lines
-
-                3. PRESENT HOTEL RECOMMENDATIONS:
-                   - Maintain all hotel details as provided (name, rating, price, location, amenities)
-                   - Explain why certain hotels might be better suited for their trip
-                   - Include practical details about hotel locations and proximity to attractions
-                   - Add blank lines between different hotel options for clarity
-                   
-                4. PRESENT ACTIVITIES RECOMMENDATIONS:
-                     - Summarize the activities in a friendly, engaging manner
-                     - Highlight unique experiences and attractions in Destination
-                     - Include specific details about each activity (location, timing, cost)
-                     - Use bullet points for easy reading and clear separation of different activities
-                     - Add blank lines between different activity options
-                     - Use the provided activity data to ensure accuracy and detail
-
-                4. CREATE A DAY-BY-DAY ITINERARY:
-                   - Provide a daily activity plan that incorporates both attractions and dining
-                   - For each day, include:
-                     * Morning activity
-                     * Lunch recommendation (using food highlights from activities data)
-                     * Afternoon activity
-                     * Dinner recommendation (using food highlights from activities data)
-                   - For the food recommendations, use the specific restaurants and details from the activities data
-                   - For the attractions, use the specific places and details from the activities data
-                   - Balance busy days with more relaxed ones
-                   - Use clear headings for each day (### Day 1 - Thursday, April 10)
-                   - Add blank lines between different sections of each day
-
-                5. INCLUDE A COMPLETE BUDGET BREAKDOWN:
-                   - Itemize all expected costs: flights, accommodation, activities, food, local transportation
-                   - Provide a total estimated cost and compare it to their stated budget of {trip_details.get("budget", "N/A")}
-                   - Offer money-saving tips that are specific to Denver
-                   - Use a clear tabular format for the budget items where appropriate
-                   IMPORTANT: Don't multipy the costs by the number of travelers when showing the flight budget. The user will do that.
-
-                6. CLOSE WITH PRACTICAL TRAVEL TIPS:
-                   - Weather expectations for their specific travel dates
-                   - Local transportation recommendations
-                   - Packing suggestions
-                   - Any special considerations for the season or local events
-                   - Add a warm closing message with well wishes for their trip
-
-                Your response should feel like a personalized conversation with a knowledgeable friend who's excited about their trip to Denver. Include specific details from all data sources while maintaining a cohesive, easy-to-follow travel plan with proper spacing and formatting.
+                Create a comprehensive day-by-day itinerary that includes:
+                1. All days from check-in to check-out
+                2. Flight arrival and departure times
+                3. Hotel check-in and check-out times
+                4. Daily activities with timing
+                5. Meal recommendations
+                6. Transportation details
+                7. Important tips and notes
+                
+                Format each day as:
+                
+                DAY X - [Day of Week, Date]
+                
+                Morning:
+                - Activities with times
+                - Transportation details
+                - Meal suggestions
+                
+                Afternoon:
+                - Activities with times
+                - Transportation details
+                - Meal suggestions
+                
+                Evening:
+                - Activities with times
+                - Transportation details
+                - Meal suggestions
+                
+                Daily Tips:
+                - Weather considerations
+                - What to bring
+                - Local customs
+                - Money-saving tips
             """)
         ]
 
         response = await self.model.ainvoke(messages)
-
-        # Ensure proper line breaks are preserved in the content
-        itinerary = response.content.replace("\\n", "\n")
-
-        # If needed, add extra formatting to ensure sections are well-separated
-        itinerary = itinerary.replace("\n\n#", "\n\n\n#")
-        itinerary = itinerary.replace("\n\n###", "\n\n\n###")
+        itinerary = response.content
 
         return {"itinerary": itinerary}
 
