@@ -1,4 +1,3 @@
-
 import requests
 import logging
 from langchain_core.messages import HumanMessage
@@ -9,11 +8,12 @@ import os
 import json
 import time
 from typing import Dict, List, TypedDict, Optional, Any
+import re
 import asyncio
-
 
 # Configure logger
 logger = logging.getLogger(__name__)
+
 
 class ActivityService:
     """Service for handling activity-related operations using the Google Places API."""
@@ -38,10 +38,12 @@ class ActivityService:
 
         print(f"============================================================")
         print(f"  STARTING RESEARCH FOR: {target_dest}")
+        if preferences:
+            print(f"  WITH PREFERENCES: {preferences}")
         print(f"============================================================")
 
         # Run the research
-        result = await self.research_destination(target_dest)
+        result = await self.research_destination(target_dest, preferences)
 
         if result.get("final_plan"):
             plan = result["final_plan"]
@@ -50,14 +52,8 @@ class ActivityService:
             print(f"  RESEARCH COMPLETED SUCCESSFULLY")
             print(f"============================================================")
 
-            # Save the travel guide
-            # output_file = f"{target_dest}.json"
-            # with open(output_file, 'w', encoding='utf-8') as f:
-            #     json.dump(plan, f, indent=2)
-
             print(f"\nTravel Guide: {plan.get('title')}")
             print(f"\nIntroduction: {plan.get('introduction')[:100]}...")
-            #print(f"\nResults saved to {output_file}")
             return plan
         else:
             print(f"============================================================")
@@ -70,16 +66,28 @@ class ActivityService:
                 print("No final plan was generated and no specific error was reported.")
 
         return None
-    async def research_destination(self,destination: str) -> AgentState:
+
+    async def research_destination(self, destination: str, preferences: Optional[str] = None) -> AgentState:
         """
-        Direct implementation of the travel research workflow without LangGraph
+        Direct implementation of the travel research workflow without LangGraph,
+        incorporating user preferences if provided.
+
+        Args:
+            destination: The destination city to research
+            preferences: Optional string containing user's activity and food preferences
+
+        Returns:
+            AgentState containing the research results and final plan
         """
         print(f"=== Starting travel research for {destination} ===")
+        if preferences:
+            print(f"=== With user preferences: {preferences} ===")
         start_time = time.time()
 
         # Initialize state
         state = AgentState(
             destination=destination,
+            preferences=preferences if preferences else None,
             messages=[{"role": "assistant", "content": f"Starting travel research for {destination}..."}],
             research_topics=[],
             research_results={},
@@ -89,8 +97,10 @@ class ActivityService:
         )
 
         try:
-            # Step 1: Generate research topics
+            # Step 1: Generate standard research topics
             print("Generating research topics...")
+
+            # Standard topics regardless of preferences
             prompt = f"""
             You are a travel research supervisor. For the destination {destination}, 
             identify the top 3 categories of information we need to research about local foods 
@@ -103,7 +113,7 @@ class ActivityService:
             """
 
             response = self.openai.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 messages=[{"role": "system", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.5
@@ -111,6 +121,26 @@ class ActivityService:
 
             content = json.loads(response.choices[0].message.content)
             research_topics = content["topics"]
+
+            # Step 1.5: Add preference-specific research topics if preferences exist
+            if preferences:
+                # Split preferences by commas, and, or other separators to identify distinct preferences
+                print(f"Generating preference-specific research topics for: {preferences}")
+                preference_items = [p.strip() for p in re.split(r'[,;&]|\s+and\s+', preferences)]
+
+                # For each distinct preference, create a direct research topic
+                preference_topics = []
+                for item in preference_items:
+                    if item:  # Skip empty items
+                        # Create both a general and a specific topic for each preference
+                        general_topic = f"Best {item} experiences in or near {destination}"
+                        specific_topic = f"Visitor guide to {item} from {destination}"
+                        preference_topics.extend([general_topic, specific_topic])
+
+                # Add preference topics to main research topics
+                research_topics.extend(preference_topics)
+                print(f"Added {len(preference_topics)} preference-specific research topics")
+
             state["research_topics"] = research_topics
             state["messages"].append({
                 "role": "assistant",
@@ -142,7 +172,7 @@ class ActivityService:
                     print(f"Error researching {topic}: {str(e)}")
                     # Continue with other topics rather than failing completely
 
-            # Step 3: Curate the content
+            # Step 3: Curate the content with separate preference content
             if state["research_results"]:
                 print("Curating research results...")
                 research_summary = {}
@@ -155,7 +185,7 @@ class ActivityService:
                         "sources": sources[:3]  # Limit to top 3 sources for brevity
                     }
 
-                prompt = f"""
+                base_prompt = f"""
                 You are a travel content curator. Based on the research results provided, organize the information into:
                 1. Local Foods: Include traditional dishes, popular restaurants, food markets, and culinary experiences.
                 2. Local Activities: Include attractions, experiences, tours, and unique things to do.
@@ -163,17 +193,46 @@ class ActivityService:
                 For each category, provide:
                 - 5-7 specific items with brief descriptions
                 - Key details (location, what makes it special, etc.)
-
-                Research results:
-                {json.dumps(research_summary, indent=2)}
-
-                Format your response as JSON with two main keys: "foods" and "activities".
-                Each should contain an array of objects with "name" and "description" fields.
                 """
 
+                # Add preference instructions if needed
+                if preferences:
+                    preference_section = f"""
+                    3. MOST IMPORTANT: Create a separate "preference_recommendations" category that ONLY contains 
+                    information related to these specific user preferences: "{preferences}"
+
+                    For the preference recommendations:
+                    - Include at least 3-5 detailed items for EACH distinct preference
+                    - Include practical information like how to get there, costs, best times to visit
+                    - If a preference is outside the main destination, include transportation options, travel time, and day trip possibilities
+                    - If any preference seems ambiguous or has multiple interpretations, provide recommendations for each interpretation
+                    """
+                    base_prompt += preference_section
+
+                # Add output format instructions
+                if preferences:
+                    format_section = f"""
+                    Research results:
+                    {json.dumps(research_summary, indent=2)}
+
+                    Format your response as JSON with three main keys: "foods", "activities", and "preference_recommendations".
+                    Each should contain an array of objects with "name", "description", and additional fields as needed.
+                    For preference_recommendations, include a "preference_category" field to indicate which specific preference it addresses.
+                    """
+                else:
+                    format_section = f"""
+                    Research results:
+                    {json.dumps(research_summary, indent=2)}
+
+                    Format your response as JSON with two main keys: "foods" and "activities".
+                    Each should contain an array of objects with "name" and "description" fields.
+                    """
+
+                full_prompt = base_prompt + format_section
+
                 response = self.openai.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "system", "content": prompt}],
+                    model="gpt-4.1-mini",
+                    messages=[{"role": "system", "content": full_prompt}],
                     response_format={"type": "json_object"},
                     temperature=0.7
                 )
@@ -183,36 +242,81 @@ class ActivityService:
 
                 foods_count = len(curated_content.get("foods", []))
                 activities_count = len(curated_content.get("activities", []))
+                preference_count = len(curated_content.get("preference_recommendations", []))
+
+                log_message = f"Research curated into {foods_count} food recommendations and {activities_count} activity recommendations"
+                if preferences:
+                    log_message += f" with {preference_count} preference-specific recommendations"
 
                 state["messages"].append({
                     "role": "assistant",
-                    "content": f"Research curated into {foods_count} food recommendations and {activities_count} activity recommendations."
+                    "content": log_message
                 })
-                print(f"Curation complete with {foods_count} foods and {activities_count} activities")
+                print(log_message)
 
             # Step 4: Create the final travel plan
             if state["curated_content"]:
                 print("Creating final travel plan...")
-                prompt = f"""
+
+                # Base prompt for both preference and non-preference cases
+                base_prompt = f"""
                 You are a travel planner for {destination}. Based on the curated research about local foods and activities,
                 create a well-formatted travel guide section that highlights the unique culinary and activity experiences.
 
                 Make your recommendations engaging, practical, and authentic to the local culture.
-
-                Curated content:
-                {json.dumps(state["curated_content"], indent=2)}
-
-                Format your response as JSON with keys:
-                - "title": A catchy title for this section
-                - "introduction": A brief introduction to the food and activity scene
-                - "food_highlights": Formatted list of food recommendations as a string with bullet points (- item)
-                - "activity_highlights": Formatted list of activity recommendations as a string with bullet points (- item)
-                - "conclusion": A brief conclusion with tips for travelers
                 """
 
+                # Add preference-specific instructions if preferences exist
+                if preferences:
+                    preference_section = f"""
+                    IMPORTANT: The traveler has these specific preferences: "{preferences}"
+
+                    The final travel guide MUST include a prominent, dedicated section called "YOUR PREFERENCES" 
+                    that focuses exclusively on the traveler's stated preferences. This section should:
+
+                    1. Be placed prominently in the guide (after the introduction)
+                    2. Begin with "Based on your specific interests in {preferences}, here are our tailored recommendations:"
+                    3. Include comprehensive information about each preference
+                    4. If a preference involves a location outside the main destination, include details about:
+                       - How to get there (transportation options)
+                       - How far it is (distance and travel time)
+                       - Whether it works as a day trip or requires overnight stay
+                       - Any special considerations for visiting
+                    """
+                    base_prompt += preference_section
+
+                # Content and formatting instructions
+                content_section = f"""
+                Curated content:
+                {json.dumps(state["curated_content"], indent=2)}
+                """
+
+                # Output format
+                if preferences:
+                    format_section = f"""
+                    Format your response as JSON with keys:
+                    - "title": A catchy title for this section
+                    - "introduction": A brief introduction to the destination (acknowledging the traveler's preferences)
+                    - "preference_section": The dedicated section addressing the user's specific interests
+                    - "food_highlights": Formatted list of food recommendations as a string with bullet points (- item)
+                    - "activity_highlights": Formatted list of activity recommendations as a string with bullet points (- item)
+                    - "conclusion": A brief conclusion with tips for travelers
+                    """
+                else:
+                    format_section = f"""
+                    Format your response as JSON with keys:
+                    - "title": A catchy title for this section
+                    - "introduction": A brief introduction to the food and activity scene
+                    - "food_highlights": Formatted list of food recommendations as a string with bullet points (- item)
+                    - "activity_highlights": Formatted list of activity recommendations as a string with bullet points (- item)
+                    - "conclusion": A brief conclusion with tips for travelers
+                    """
+
+                full_prompt = base_prompt + content_section + format_section
+
                 response = self.openai.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "system", "content": prompt}],
+                    model="gpt-4.1-mini",
+                    messages=[{"role": "system", "content": full_prompt}],
                     response_format={"type": "json_object"},
                     temperature=0.7
                 )
@@ -230,6 +334,9 @@ class ActivityService:
             error_msg = f"Error in travel research process: {str(e)}"
             print(error_msg)
             state["error"] = error_msg
+            import traceback
+            traceback_str = traceback.format_exc()
+            print(f"Detailed traceback: {traceback_str}")
 
         elapsed_time = time.time() - start_time
         print(f"=== Travel research completed in {elapsed_time:.1f} seconds ===")

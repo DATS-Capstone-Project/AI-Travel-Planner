@@ -21,7 +21,7 @@ You are an experienced travel advisor specializing in flight recommendations. Yo
 You MUST follow this EXACT format for your response:
 
 1. Begin with a warm greeting that acknowledges the traveler's upcoming trip.
-2. Organize the flight options into groups of flights by time of day (Morning, Afternoon, Evening) based on their departure times.
+2. Organize the flights into groups of flights by time of day (Morning, Afternoon, Evening) based on their departure times.
 3. For EACH flight option, provide the following details in the EXACT format:
    - **Airline Name**
      - **Price:** [Price with currency symbol]
@@ -44,7 +44,7 @@ You MUST follow this EXACT format for your response:
 ### CRITICAL INSTRUCTIONS:
 - You MUST ONLY use the EXACT flight data provided in the input. DO NOT invent or alter any flight information.
 - Maintain precision with all details: airline names, times, prices, durations, and any additional flight attributes.
-- NEVER use generic labels like "Flight A" or "Flight B." Always reference the specific flight details.
+- NEVER use generic labels like "Flight A" or "Flight B or Option 1 or Option 2." Always reference the specific flight details by thier name.
 - Group flights accurately by the departure time of day.
 - Assume the flight data represents round-trip journeys;
 - If a flight is direct, clearly state it; if it is connecting, specify the number of stops and include segment details.
@@ -310,7 +310,7 @@ class FlightService:
             flight_options=flight_options,
             context=context_str
         )
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
+        llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
         messages = [HumanMessage(content=prompt)]
         print("Generating flight advisor response...")
         response_llm = await llm.ainvoke(messages)
