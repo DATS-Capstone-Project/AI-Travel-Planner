@@ -260,8 +260,15 @@ class ChatManager:
             itinerary = supervisor_result.get("itinerary",
                                               "I've created your travel plan based on your preferences.")
 
+            # Extract the budget breakdown from the itinerary
+            budget_breakdown = self._extract_budget_breakdown(itinerary)
+
             # Store the itinerary in the session repository
             self.session_repository.set_itinerary(session_id, itinerary)
+
+            # Store the budget breakdown if extracted successfully
+            if budget_breakdown:
+                self.session_repository.set_trip_cost_breakdown(session_id, budget_breakdown)
 
             return {
                 "response": itinerary,
@@ -276,6 +283,220 @@ class ChatManager:
                 "response": "I'm sorry, but I encountered an error while planning your trip. Please try again.",
                 "extracted_data": trip_details.to_dict()
             }
+
+    def _extract_budget_breakdown(self, itinerary: str) -> Dict[str, Any]:
+        """Extract budget breakdown from the itinerary text with improved pattern matching."""
+        try:
+            logger.info("Attempting to extract budget breakdown from itinerary")
+
+            # Check if the budget breakdown section exists
+            if "budget breakdown" not in itinerary.lower() and "estimated costs" not in itinerary.lower():
+                logger.info("No budget breakdown found in itinerary")
+                return None
+
+            # Initialize variables for extraction
+            budget_items = []
+            total_cost = 0
+            currency = "USD"  # Default currency
+
+            # Dictionary of common budget categories with descriptions
+            descriptions = {
+                "flight": "Round-trip airfare between origin and destination cities.",
+                "flights": "Round-trip airfare between origin and destination cities.",
+                "flight (per traveler)": "Round-trip airfare per person between origin and destination cities.",
+                "flights (per traveler)": "Round-trip airfare per person between origin and destination cities.",
+                "hotel": "Accommodation costs for the entire stay.",
+                "hotels": "Accommodation costs for the entire stay.",
+                "lodging": "Accommodation costs for the entire stay.",
+                "accommodation": "Accommodation costs for the entire stay.",
+                "accommodations": "Accommodation costs for the entire stay.",
+                "food": "Estimated food and dining expenses for the trip duration.",
+                "meals": "Estimated food and dining expenses for the trip duration.",
+                "dining": "Estimated food and dining expenses for the trip duration.",
+                "food (approx. per day)": "Estimated daily food and dining expenses.",
+                "activities": "Costs for sightseeing, tours, attractions, and entertainment.",
+                "attractions": "Costs for sightseeing, tours, and entertainment venues.",
+                "entertainment": "Costs for attractions, shows, and entertainment activities.",
+                "transport": "Local transportation expenses including taxis, public transit, and ride shares.",
+                "transportation": "Local transportation expenses including taxis, public transit, and ride shares.",
+                "local transportation": "Transportation expenses within the destination including taxis and public transit.",
+                "car rental": "Vehicle rental costs for the duration of the trip.",
+                "shopping": "Estimated expenses for souvenirs and personal shopping.",
+                "souvenirs": "Estimated expenses for mementos and gifts.",
+                "miscellaneous": "Additional expenses not covered in other categories."
+            }
+
+            # Try to extract using markdown table format first (most common)
+            table_pattern = r"\| *([^|]+) *\| *\$?([\d,\.]+) *\|"
+            table_matches = re.findall(table_pattern, itinerary)
+
+            if table_matches:
+                logger.info(f"Found {len(table_matches)} budget items in table format")
+
+                # Extract items - filter out header rows and total row
+                for item, amount in table_matches:
+                    item = item.strip()
+                    # Skip the header row and the total row
+                    if (item.lower() == "item" or
+                            "total" in item.lower() or
+                            "estimated cost" in item.lower() or
+                            "---" in item):
+                        continue
+
+                    # Clean the amount and convert to float
+                    cleaned_amount = amount.replace(',', '').strip()
+                    try:
+                        float_amount = float(cleaned_amount)
+                        # Add description based on category
+                        description = ""
+                        item_lower = item.lower()
+                        for key, desc in descriptions.items():
+                            if key in item_lower:
+                                description = desc
+                                break
+
+                        budget_items.append({
+                            "category": item,
+                            "amount": float_amount,
+                            "description": description
+                        })
+                    except ValueError:
+                        logger.warning(f"Could not convert amount '{amount}' to float")
+
+                # Try to extract total specifically
+                total_pattern = r"\| *\*?\*?(?:Total|TOTAL|Total Estimated Cost)\*?\*? *\| *\*?\*?\$?([\d,\.]+)\*?\*? *\|"
+                total_match = re.search(total_pattern, itinerary)
+
+                if total_match:
+                    total_cost = float(total_match.group(1).replace(',', ''))
+                    logger.info(f"Found total cost: ${total_cost}")
+                else:
+                    # Calculate total from items if explicit total not found
+                    total_cost = sum(item["amount"] for item in budget_items)
+                    logger.info(f"Calculated total cost from items: ${total_cost}")
+
+            # If no table format found, try bullet or list format
+            elif not budget_items:
+                # Look for bullet points or numbered lists with costs
+                list_pattern = r"[-*•]\s+([^:$]+):\s+\$?([\d,\.]+)"
+                list_matches = re.findall(list_pattern, itinerary)
+
+                if list_matches:
+                    logger.info(f"Found {len(list_matches)} budget items in list format")
+                    for item, amount in list_matches:
+                        cleaned_amount = amount.replace(',', '').strip()
+                        try:
+                            float_amount = float(cleaned_amount)
+                            # Add description based on category
+                            description = ""
+                            item_lower = item.lower().strip()
+                            for key, desc in descriptions.items():
+                                if key in item_lower:
+                                    description = desc
+                                    break
+
+                            budget_items.append({
+                                "category": item.strip(),
+                                "amount": float_amount,
+                                "description": description
+                            })
+                        except ValueError:
+                            logger.warning(f"Could not convert amount '{amount}' to float")
+
+                    # Try to find total in text
+                    total_pattern = r"Total(?:\s+Estimated)?\s+Cost:?\s+\$?([\d,\.]+)"
+                    total_match = re.search(total_pattern, itinerary, re.IGNORECASE)
+
+                    if total_match:
+                        total_cost = float(total_match.group(1).replace(',', ''))
+                    else:
+                        # Calculate total from items
+                        total_cost = sum(item["amount"] for item in budget_items)
+
+            # Try another common format: key-value pairs
+            elif not budget_items:
+                pair_pattern = r"([^:]+):\s+\$?([\d,\.]+)"
+                pair_matches = re.findall(pair_pattern, itinerary)
+
+                if pair_matches:
+                    logger.info(f"Found {len(pair_matches)} budget items in key-value format")
+                    for item, amount in pair_matches:
+                        item_lower = item.lower().strip()
+                        # Skip if it's not likely a budget item
+                        if ("total" in item_lower and "cost" in item_lower) or item_lower == "budget":
+                            continue
+
+                        if any(word in item_lower for word in
+                               ["flight", "hotel", "food", "activities", "transport", "activities", "dining"]):
+                            cleaned_amount = amount.replace(',', '').strip()
+                            try:
+                                float_amount = float(cleaned_amount)
+                                # Add description based on category
+                                description = ""
+                                for key, desc in descriptions.items():
+                                    if key in item_lower:
+                                        description = desc
+                                        break
+
+                                budget_items.append({
+                                    "category": item.strip(),
+                                    "amount": float_amount,
+                                    "description": description
+                                })
+                            except ValueError:
+                                continue
+
+                    # Look for total cost
+                    total_pattern = r"Total(?:\s+Estimated)?\s+Cost:?\s+\$?([\d,\.]+)"
+                    total_match = re.search(total_pattern, itinerary, re.IGNORECASE)
+
+                    if total_match:
+                        total_cost = float(total_match.group(1).replace(',', ''))
+                    else:
+                        # Calculate total
+                        total_cost = sum(item["amount"] for item in budget_items)
+
+            # If we have budget items, create and return the breakdown
+            if budget_items:
+                # Handle special case if total doesn't match sum of items
+                items_total = sum(item["amount"] for item in budget_items)
+                if abs(items_total - total_cost) > 1.0:  # Allow for minor rounding differences
+                    logger.warning(f"Total cost (${total_cost}) doesn't match sum of items (${items_total})")
+                    # Trust the explicit total if available, otherwise use the sum
+                    if total_cost == 0:
+                        total_cost = items_total
+
+                # Ensure all items have descriptions - add generic ones if missing
+                for item in budget_items:
+                    if not item["description"]:
+                        category_lower = item["category"].lower()
+                        # Try to match with our descriptions again using partial matching
+                        for key, desc in descriptions.items():
+                            if key.split()[0] in category_lower:  # Match first word
+                                item["description"] = desc
+                                break
+
+                        # If still no description, add a generic one
+                        if not item["description"]:
+                            item["description"] = f"Estimated costs for {item['category']}."
+
+                budget_breakdown = {
+                    "currency": currency,
+                    "total": total_cost,
+                    "items": budget_items
+                }
+
+                logger.info(f"Successfully extracted budget breakdown with {len(budget_items)} items")
+                return budget_breakdown
+            else:
+                logger.warning("Found budget section but couldn't extract items")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error extracting budget breakdown: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
 
     async def _handle_followup_question(self, session_id: str, message: str, trip_details: TripDetails) -> Dict[
         str, Any]:

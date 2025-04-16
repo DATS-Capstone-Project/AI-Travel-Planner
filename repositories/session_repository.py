@@ -41,6 +41,10 @@ class SessionRepository:
         """Get Redis key for the stored itinerary"""
         return f"session:{session_id}:itinerary"
 
+    def _get_cost_breakdown_key(self, session_id: str) -> str:
+        """Get Redis key for the cost breakdown"""
+        return f"session:{session_id}:cost_breakdown"
+
     def get_thread_id(self, session_id: str) -> Optional[str]:
         """Get thread ID for a session (legacy support)"""
         thread_id = self.redis.get(self._get_thread_key(session_id))
@@ -135,7 +139,8 @@ class SessionRepository:
             self._get_confirmed_key(session_id),
             self._get_trip_details_key(session_id),
             self._get_messages_key(session_id),
-            self._get_itinerary_key(session_id)
+            self._get_itinerary_key(session_id),
+            self._get_cost_breakdown_key(session_id)
         ]
 
         # Delete all keys for this session
@@ -157,7 +162,8 @@ class SessionRepository:
             self._get_confirmed_key(session_id),
             self._get_trip_details_key(session_id),
             self._get_messages_key(session_id),
-            self._get_itinerary_key(session_id)
+            self._get_itinerary_key(session_id),
+            self._get_cost_breakdown_key(session_id)
         ]
 
         # Set expiration for each key
@@ -203,3 +209,31 @@ class SessionRepository:
 
         logger.info(f"Cleared {cleared_count} sessions matching pattern '{pattern}'")
         return cleared_count
+
+    def get_trip_cost_breakdown(self, session_id: str) -> Dict:
+        """Get trip cost breakdown for a session"""
+        try:
+            cost_breakdown_json = self.redis.get(self._get_cost_breakdown_key(session_id))
+            if cost_breakdown_json:
+                return json.loads(cost_breakdown_json)
+        except Exception as e:
+            logger.error(f"Error retrieving trip cost breakdown for session {session_id}: {e}")
+
+        # Return default empty breakdown if none exists or an error occurred
+        return {
+            "currency": "USD",
+            "total": 0,
+            "items": []
+        }
+
+    def set_trip_cost_breakdown(self, session_id: str, cost_breakdown: Dict) -> None:
+        """Store the trip cost breakdown for a session"""
+        try:
+            self.redis.set(
+                self._get_cost_breakdown_key(session_id),
+                json.dumps(cost_breakdown),
+                ex=self.default_expiry
+            )
+            logger.info(f"Stored trip cost breakdown for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error storing trip cost breakdown for session {session_id}: {e}")
