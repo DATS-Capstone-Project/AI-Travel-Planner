@@ -359,7 +359,7 @@ class HotelService:
                 context=context_str
             )
 
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
+            llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
             messages = [{"role": "user", "content": prompt}]
             logging.info("Generating hotel recommendations...")
             response = await llm.agenerate(messages=[messages])

@@ -52,7 +52,7 @@ class TravelSupervisor:
         self.flight_service = flight_service
         self.hotel_service = hotel_service
         self.activity_service = activity_service
-        self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o-mini", temperature=0)
+        self.model = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4.1-mini", temperature=0)
         #self.distance_service = DistanceService()
         self.logger = logging.getLogger(__name__)
 
@@ -196,33 +196,6 @@ class TravelSupervisor:
         hotels_content = hotels_result.get("hotels", "")
         activities_content = activities_result.get("activities", "")
 
-        # Default proximity message
-        # proximity_message = "Could not determine hotel/activity proximity."
-        #
-        # try:
-        #     hotels_list = hotels_content.split("|")
-        #     activities_list = activities_content.split("|")
-        #
-        #     # Call DistanceService
-        #     proximity_human_msg = self.distance_service.check_proximity(hotels_list, activities_list)
-        #
-        #     proximity_message = proximity_human_msg.content
-        #
-        #     if "Recommend searching for closer hotels" in proximity_message:
-        #         # Refine hotels
-        #         refined_hotels_msg = self.hotel_service.get_hotels(
-        #             destination=f"{state['trip_details']['destination']} city center",
-        #             start_date=state["trip_details"]["start_date"],
-        #             end_date=state["trip_details"]["end_date"],
-        #             budget=state["trip_details"].get("budget")
-        #         )
-        #         hotels_content = refined_hotels_msg.content
-        #         proximity_message += "\nRefined hotel search applied."
-        #
-        # except Exception as e:
-        #     self.logger.error(f"Proximity check failed: {e}")
-        #     proximity_message = f"Proximity check error: {e}"
-
         # Update state
         state.update({
             "flights": flights_result.get("flights", []),
@@ -253,92 +226,125 @@ class TravelSupervisor:
             HumanMessage(content=f"""
                 You are an experienced travel consultant creating a personalized travel plan. Write in a friendly, conversational tone as if you're directly advising the traveler.
 
-                Based on the following information, create a detailed travel plan:
+IMPORTANT: The following data contains pre-formatted information from specialized travel services. Maintain the detailed information while creating a cohesive travel plan.
 
-                TRIP DETAILS:
-                {trip_details}
+Based on the following information, create a detailed travel plan:
 
-                FLIGHT OPTIONS:
-                {flights}
+TRIP DETAILS:
+{trip_details}
 
-                HOTEL DETAILS:
-                {hotels}
-                 Present hotels exactly as provided, maintaining all details and formatting. Only show available categories (Budget-Friendly/Mid-Range/Luxury).
+FLIGHT OPTIONS:
+{flights}
 
-            For each hotel:
-            ```
-            **[Hotel Name]**
-            - Rating and reviews
-            - Price per night and total price
-            - Location details
-            - Property description
-            - Key amenities
-            - Perfect for (target travelers)
-            - Nearby attractions
-            - Special tips
-            ```
+HOTEL OPTIONS:
+{hotels}
 
-            After each category, provide a COMPARATIVE ANALYSIS of:
-            - Price-to-value comparison
-            - Location advantages/disadvantages
-            - Amenity differences
-            - Best suited traveler types
-         
-             BUDGET BREAKDOWN
-            Provide a detailed budget breakdown:
-            - Flights
-            - Accommodation
-            - Activities
-            - Meals and incidentals
-            - Transportation
-            - Total estimated cost
+ACTIVITIES INFORMATION:
+{activities}
+
+FORMATTING INSTRUCTIONS:
+- Use proper markdown formatting with headers (##, ###) for each section
+- Include blank lines between paragraphs and sections (use double line breaks)
+- Use bullet points (- ) for lists
+- Ensure there are no unnecessary line breaks within paragraphs
+- Use proper indentation for readability
+- For tables, use markdown table format with proper spacing
+- Preserve exact formatting of flight details, hotel names, prices, and other key information
+
+GUIDANCE FOR CREATING THE TRAVEL PLAN:
+
+1. START WITH A PERSONALIZED GREETING:
+   - Begin with a warm, personalized welcome that acknowledges their specific trip details
+   - Express enthusiasm about their trip to {trip_details.get("destination")}
+   - If they've provided preferences, explicitly acknowledge them (e.g., "I've noticed you're interested in [preferences]")
+   - Briefly highlight what makes the destination special during their travel dates
+
+2. INCLUDE A DEDICATED TRAVELER PREFERENCES SECTION (if preferences exist):
+   - Right after the introduction, create a special section titled "YOUR PREFERENCES"
+   - Directly address each preference mentioned in the trip details
+   - Provide detailed information about each preference, including:
+     * Specific locations related to the preference
+     * How to best experience it during their trip
+     * Any special considerations (timing, tickets, reservations needed)
+     * For preferences outside the main destination, include transportation options and travel time
+   - Make this section visually distinctive and prominent
+   - End the section with a transition to the rest of the plan
+
+3. PRESENT FLIGHT RECOMMENDATIONS:
+   - Preserve the detailed flight information exactly as provided
+   - Present the best flight options for both outbound and return journey
+   - Highlight key benefits of each recommended flight (timing, amenities, price)
+   - If flights are organized by time of day, maintain this structure
+   - Ensure each flight option is clearly separated with blank lines
+
+4. PRESENT HOTEL RECOMMENDATIONS:
+   - Maintain all hotel details as provided (name, rating, price, location, amenities)
+   - Explain why certain hotels might be better suited for their trip
+   - If preferences exist, highlight hotels that are conveniently located near their interests
+   - Include practical details about hotel locations and proximity to attractions
+   - Add blank lines between different hotel options for clarity
+   
+5. PRESENT ACTIVITIES RECOMMENDATIONS:
+   - Summarize the activities in a friendly, engaging manner
+   - Highlight unique experiences and attractions in the destination
+   - If preferences exist, prioritize activities that match their interests
+   - Include specific details about each activity (location, timing, cost)
+   - Use bullet points for easy reading and clear separation of different activities
+   - Add blank lines between different activity options
+   - Use the provided activity data to ensure accuracy and detail
+
+6. CREATE A DAY-BY-DAY ITINERARY:
+   - Provide a daily activity plan that incorporates both attractions and dining
+   - If preferences exist, ensure these are prominently featured in the itinerary on appropriate days
+   - For each day, include:
+        Morning:
+            - Activities with times
+            - Transportation details
+            - Meal suggestions
             
+        Afternoon:
+            - Activities with times
+            - Transportation details
+            - Meal suggestions
             
-            FINAL RECOMMENDATIONS
-            Provide a "BEST MATCH" recommendation including:
-            - Best flight option with reasoning
-            - Best hotel option with reasoning
-            - Must-do activities
+        Evening:
+            - Activities with times
+            - Transportation details
+            - Meal suggestions
+            
+        Daily Tips:
+            - Weather considerations
+            - What to bring
+            - Local customs
             - Money-saving tips
-            - Practical travel tips
+            - Use the activities data to create a balanced itinerary
+   - For the food recommendations, use the specific restaurants and details from the activities data
+   - For the attractions, use the specific places and details from the activities data
+   - Balance busy days with more relaxed ones
+   - Use clear headings for each day (### Day 1 - Thursday, April 10)
+   - Ensure any preference-related activities are highlighted or marked in some way
+   - Add blank lines between different sections of each day
 
+7. INCLUDE A COMPLETE BUDGET BREAKDOWN:
+   - Itemize all expected costs: flights, accommodation, activities, food, local transportation
+   - Don't multiply the costs by the number of travelers for flights
+   - Display the flight costs as is and don't calculate for the round trip
+   - If preferences require special expenses (e.g., day trips), include these as separate line items
+   - Provide a total estimated cost and compare it to their stated budget of {trip_details.get("budget", "N/A")}
+   - Offer money-saving tips that are specific to the destination
+   - Use a clear tabular format for the budget items where appropriate
 
-                RECOMMENDED ACTIVITIES:
-                {activities}
+8. CLOSE WITH PRACTICAL TRAVEL TIPS:
+   - Weather expectations for their specific travel dates
+   - Local transportation recommendations
+   - Packing suggestions tailored to their activities and preferences
+   - Any special considerations for the season or local events
+   - For any preferences requiring special planning (like excursions), add specific tips
+   - Add a warm closing message with well wishes for their trip
 
-                Create a comprehensive day-by-day itinerary that includes:
-                1. All days from check-in to check-out
-                2. Flight arrival and departure times
-                3. Hotel check-in and check-out times
-                4. Daily activities with timing
-                5. Meal recommendations
-                6. Transportation details
-                7. Important tips and notes
-                
-                Format each day as:
-                
-                DAY X - [Day of Week, Date]
-                
-                Morning:
-                - Activities with times
-                - Transportation details
-                - Meal suggestions
-                
-                Afternoon:
-                - Activities with times
-                - Transportation details
-                - Meal suggestions
-                
-                Evening:
-                - Activities with times
-                - Transportation details
-                - Meal suggestions
-                
-                Daily Tips:
-                - Weather considerations
-                - What to bring
-                - Local customs
-                - Money-saving tips
+Your response should feel like a personalized conversation with a knowledgeable friend who's excited about their trip. Include specific details from all data sources while maintaining a cohesive, easy-to-follow travel plan with proper spacing and formatting.
+
+CRITICAL: If "Preferences" is present in the trip details, ensure these preferences are prominently addressed throughout the plan, especially in the dedicated preferences section and daily itinerary.
             """)
         ]
 

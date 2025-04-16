@@ -310,7 +310,7 @@ class FlightService:
             flight_options=flight_options,
             context=context_str
         )
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
+        llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.5, openai_api_key=OPENAI_API_KEY)
         messages = [HumanMessage(content=prompt)]
         print("Generating flight advisor response...")
         response_llm = await llm.ainvoke(messages)

@@ -290,7 +290,7 @@ async def get_events(destination: str):
         List of events at the destination
     """
     try:
-        events = event_service.get_events(destination)
+        events = await event_service.get_events(destination)
         return {"events": events}
     except Exception as e:
         logger.error(f"Error fetching events for {destination}: {e}")

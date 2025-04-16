@@ -8,6 +8,7 @@ import os
 import json
 import time
 from typing import Dict, List, TypedDict, Optional, Any
+import re
 import asyncio
 
 # Configure logger
@@ -112,7 +113,7 @@ class ActivityService:
             """
 
             response = self.openai.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 messages=[{"role": "system", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.5
@@ -230,7 +231,7 @@ class ActivityService:
                 full_prompt = base_prompt + format_section
 
                 response = self.openai.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                     messages=[{"role": "system", "content": full_prompt}],
                     response_format={"type": "json_object"},
                     temperature=0.7
@@ -314,7 +315,7 @@ class ActivityService:
                 full_prompt = base_prompt + content_section + format_section
 
                 response = self.openai.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                     messages=[{"role": "system", "content": full_prompt}],
                     response_format={"type": "json_object"},
                     temperature=0.7
